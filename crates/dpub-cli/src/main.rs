@@ -70,6 +70,17 @@ fn cmd_info(ncc_path: &std::path::Path) -> Result<()> {
     println!("  Headings:    {headings} ({})", format_levels(&by_level));
     println!("  Pages:       {pages}");
 
+    println!();
+    println!("SMIL:");
+    println!("  Sections:    {}", book.master.references.len());
+    println!("  Synch points: {}", book.total_par_count());
+    println!("  Audio clips: {}", book.total_audio_clip_count());
+    println!(
+        "  Audio total: {}",
+        format_duration(book.total_audio_seconds())
+    );
+    println!("  Audio files: {}", book.audio_files().len());
+
     if !m.other.is_empty() {
         println!();
         println!("Other metadata:");
@@ -84,6 +95,17 @@ fn cmd_info(ncc_path: &std::path::Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn format_duration(seconds: f64) -> String {
+    // Cap at one year (~31.5M seconds), well past any realistic talking book.
+    // The cast is safe in this range and avoids float-to-int UB / overflow.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let total = seconds.clamp(0.0, 31_536_000.0).round() as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    format!("{h:02}:{m:02}:{s:02}")
 }
 
 fn format_levels(by_level: &std::collections::BTreeMap<u8, usize>) -> String {
