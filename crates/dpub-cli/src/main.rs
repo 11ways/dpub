@@ -25,6 +25,14 @@ enum Command {
         /// Output path for the resulting `.epub` file.
         #[arg(short, long)]
         output: PathBuf,
+        /// Run EPUBCheck against the produced file and report any issues.
+        #[arg(long)]
+        validate: bool,
+    },
+    /// Validate an existing EPUB 3 publication with EPUBCheck.
+    Validate {
+        /// Path to the `.epub` file to validate.
+        epub: PathBuf,
     },
 }
 
@@ -41,11 +49,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Info { ncc } => cmd_info(&ncc),
-        Command::Convert { ncc, output } => cmd_convert(&ncc, &output),
+        Command::Convert {
+            ncc,
+            output,
+            validate,
+        } => cmd_convert(&ncc, &output, validate),
+        Command::Validate { epub } => cmd_validate(&epub),
     }
 }
 
-fn cmd_convert(ncc: &std::path::Path, output: &std::path::Path) -> Result<()> {
+fn cmd_convert(ncc: &std::path::Path, output: &std::path::Path, validate: bool) -> Result<()> {
     let book = Book::from_ncc(ncc).with_context(|| format!("loading {}", ncc.display()))?;
     println!("Converting {} → {}", ncc.display(), output.display());
     println!(
@@ -70,7 +83,54 @@ fn cmd_convert(ncc: &std::path::Path, output: &std::path::Path) -> Result<()> {
         mib,
         elapsed.as_secs_f64(),
     );
+
+    if validate {
+        println!();
+        cmd_validate(output)?;
+    }
     Ok(())
+}
+
+fn cmd_validate(epub: &std::path::Path) -> Result<()> {
+    if !dpub_validate::epubcheck_available() {
+        anyhow::bail!(
+            "epubcheck is not on PATH; install it (e.g. `brew install epubcheck`) and retry"
+        );
+    }
+    let report = dpub_validate::validate_epub(epub)
+        .with_context(|| format!("validating {}", epub.display()))?;
+    print_report(&report);
+    if !report.is_clean() {
+        anyhow::bail!("validation reported errors");
+    }
+    Ok(())
+}
+
+fn print_report(report: &dpub_validate::Report) {
+    let Some(epubcheck) = &report.epubcheck else {
+        println!("No validators ran.");
+        return;
+    };
+    println!(
+        "EPUBCheck {}: {} fatals / {} errors / {} warnings / {} usages",
+        epubcheck.version.as_deref().unwrap_or("?"),
+        epubcheck.summary.fatals,
+        epubcheck.summary.errors,
+        epubcheck.summary.warnings,
+        epubcheck.summary.infos,
+    );
+    for issue in &epubcheck.issues {
+        println!(
+            "  [{sev}] {id} {loc}{msg}",
+            sev = issue.severity.as_str(),
+            id = issue.id.as_deref().unwrap_or("-"),
+            loc = match &issue.location {
+                Some(l) => format!("{l} — "),
+                None => String::new(),
+            },
+            msg = issue.message,
+        );
+    }
 }
 
 fn cmd_info(ncc_path: &std::path::Path) -> Result<()> {

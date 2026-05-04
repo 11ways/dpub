@@ -55,7 +55,7 @@ SMIL:
 | **M1** | Full DAISY parser: NCC + master.smil + per-section SMIL + audio metadata; structural round-trip. ✅ |
 | **M2** | Minimal EPUB 3 writer (audio-only with Media Overlays). EPUBCheck-clean. ✅ |
 | **M3** | End-to-end: `dpub convert <ncc.html> -o out.epub`. ✅ |
-| **M4** | Built-in validation (EPUBCheck + ACE) — `dpub validate`. |
+| **M4** | Built-in validation (EPUBCheck + ACE) — `dpub validate`. ✅ (EPUBCheck only; ACE deferred) |
 | **M5** | Audio recompression (MP3 → Opus). |
 | **M6** | Whisper transcription for audio-only books. |
 | **M7** | WASM build for browser-based conversion. |
@@ -69,6 +69,7 @@ dpub/
 │   ├── dpub-core/      # DAISY 2.02 model + parser
 │   ├── epub3-writer/   # EPUB 3 model + ZIP serialiser (Media Overlays)
 │   ├── dpub-convert/   # DAISY 2.02 → EPUB 3 conversion
+│   ├── dpub-validate/  # EPUBCheck wrapper + structured report
 │   └── dpub-cli/       # `dpub` binary
 └── ...
 ```

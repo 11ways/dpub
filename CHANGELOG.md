@@ -21,5 +21,6 @@ All notable changes to this project will be documented in this file. The format 
 - Dependencies pinned at workspace level: `zip` 2.x, `chrono` 0.4 (clock-only feature), `uuid` 1.x.
 - New `dpub-convert` crate and `dpub convert <ncc.html> -o out.epub` subcommand (M3): end-to-end DAISY 2.02 → EPUB 3 conversion. Audio is embedded byte-for-byte (no recompression); SMIL 1.0 Media Overlays are translated to SMIL 3.0; NCC navigation becomes a hierarchical `nav.xhtml` with a separate page-list. Verified against a real 11h45m audiobook: full conversion in <0.5s on M-series hardware, EPUBCheck-clean (0 errors / 0 warnings) where Pipeline 2's output emits 2 errors / 31 warnings on the same input.
 - MSRV bumped to Rust 1.88 (let-chains).
+- New `dpub-validate` crate and `dpub validate <epub>` subcommand (M4): subprocess-wraps the official EPUBCheck JVM tool when present on `PATH`, parses its `--json -` output, and prints a structured summary plus per-issue list. The `dpub convert` command grows a `--validate` flag that runs validation right after writing. Exit code is non-zero when any error or fatal is reported.
 
 [Unreleased]: https://github.com/11ways/dpub/compare/...HEAD
