@@ -18,6 +18,14 @@ enum Command {
         /// Path to the publication's `ncc.html`.
         ncc: PathBuf,
     },
+    /// Convert a DAISY 2.02 publication to an EPUB 3 file.
+    Convert {
+        /// Path to the publication's `ncc.html`.
+        ncc: PathBuf,
+        /// Output path for the resulting `.epub` file.
+        #[arg(short, long)]
+        output: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -33,7 +41,36 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Info { ncc } => cmd_info(&ncc),
+        Command::Convert { ncc, output } => cmd_convert(&ncc, &output),
     }
+}
+
+fn cmd_convert(ncc: &std::path::Path, output: &std::path::Path) -> Result<()> {
+    let book = Book::from_ncc(ncc).with_context(|| format!("loading {}", ncc.display()))?;
+    println!("Converting {} → {}", ncc.display(), output.display());
+    println!(
+        "  {} sections, {} sync points, {} audio clips, total {}",
+        book.master.references.len(),
+        book.total_par_count(),
+        book.total_audio_clip_count(),
+        format_duration(book.total_audio_seconds()),
+    );
+    let start = std::time::Instant::now();
+    dpub_convert::convert_to_file(&book, output)
+        .with_context(|| format!("writing {}", output.display()))?;
+    let elapsed = start.elapsed();
+    let bytes = std::fs::metadata(output).map_or(0, |m| m.len());
+    // Audiobooks rarely exceed a few hundred GiB, so the precision loss in the
+    // u64→f64 cast for the human-readable size readout is irrelevant.
+    #[allow(clippy::cast_precision_loss)]
+    let mib = bytes as f64 / 1_048_576.0;
+    println!(
+        "Wrote {} ({:.1} MiB) in {:.2}s",
+        output.display(),
+        mib,
+        elapsed.as_secs_f64(),
+    );
+    Ok(())
 }
 
 fn cmd_info(ncc_path: &std::path::Path) -> Result<()> {

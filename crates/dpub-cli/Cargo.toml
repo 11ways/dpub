@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 dpub-core = { path = "../dpub-core", version = "0.1.0-dev" }
+dpub-convert = { path = "../dpub-convert", version = "0.1.0-dev" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

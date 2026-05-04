@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/dpub-core",
     "crates/dpub-cli",
+    "crates/dpub-convert",
     "crates/epub3-writer",
 ]
 
