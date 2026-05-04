@@ -38,6 +38,13 @@ Total time:    11:45:09
 Navigation:
   Headings:    30 (h1: 19, h2: 11)
   Pages:       334
+
+SMIL:
+  Sections:    30
+  Synch points: 364
+  Audio clips: 10532
+  Audio total: 11:45:09
+  Audio files: 30
 ```
 
 ## Roadmap
@@ -45,7 +52,7 @@ Navigation:
 | Milestone | Scope |
 | --- | --- |
 | **M0.5** | `dpub info` — read NCC metadata and nav summary. ✅ |
-| **M1** | Full DAISY parser: NCC + master.smil + per-section SMIL + audio metadata; round-trip-stable. |
+| **M1** | Full DAISY parser: NCC + master.smil + per-section SMIL + audio metadata; structural round-trip. ✅ |
 | **M2** | Minimal EPUB 3 writer (audio-only with Media Overlays). EPUBCheck-clean. |
 | **M3** | End-to-end: `dpub convert <ncc.html> -o out.epub`. |
 | **M4** | Built-in validation (EPUBCheck + ACE) — `dpub validate`. |
