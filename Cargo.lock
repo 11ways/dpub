@@ -231,9 +231,22 @@ version = "0.1.0-dev"
 dependencies = [
  "anyhow",
  "clap",
+ "dpub-convert",
  "dpub-core",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "dpub-convert"
+version = "0.1.0-dev"
+dependencies = [
+ "chrono",
+ "dpub-core",
+ "epub3-writer",
+ "tempfile",
+ "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]

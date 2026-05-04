@@ -1,0 +1,21 @@
+[package]
+name = "dpub-convert"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DAISY 2.02 → EPUB 3 conversion built on dpub-core and epub3-writer"
+
+[lints]
+workspace = true
+
+[dependencies]
+dpub-core = { path = "../dpub-core", version = "0.1.0-dev" }
+epub3-writer = { path = "../epub3-writer", version = "0.1.0-dev" }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
