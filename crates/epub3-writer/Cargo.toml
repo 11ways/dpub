@@ -1,0 +1,20 @@
+[package]
+name = "epub3-writer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Builder and serialiser for accessible EPUB 3 publications with Media Overlays"
+
+[lints]
+workspace = true
+
+[dependencies]
+zip = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

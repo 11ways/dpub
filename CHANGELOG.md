@@ -17,5 +17,7 @@ All notable changes to this project will be documented in this file. The format 
 - Canonical-form SMIL writer (`write_master_smil`, `write_section_smil`); structural round-trip is tested against synthetic and real-world fixtures.
 - Opt-in integration test (`DPUB_TEST_BOOK=...`) that asserts: section count matches `master.smil`, par count matches `ncc:tocItems`, audio total matches `ncc:totalTime` ±2s, and round-trip preserves the AST for every SMIL file in the book.
 - `dpub info` now reports SMIL stats: section count, sync-point count, audio-clip count, total measured audio duration, distinct audio file count.
+- New `epub3-writer` crate: typed `Publication` model and ZIP serialiser for accessible EPUB 3 publications with Media Overlays (M2). Output validates EPUBCheck-clean on synthetic fixtures; integration test invokes `epubcheck` automatically when present.
+- Dependencies pinned at workspace level: `zip` 2.x, `chrono` 0.4 (clock-only feature), `uuid` 1.x.
 
 [Unreleased]: https://github.com/11ways/dpub/compare/...HEAD
