@@ -324,7 +324,7 @@ fn write_overlay_par(s: &mut String, par: &OverlayPar, indent: usize) {
         .map(|i| format!(" id=\"{}\"", escape_attr(i)))
         .unwrap_or_default();
     let _ = write!(s, "{pad}<par{id_attr}>\n");
-    let _ = write!(s, "{pad}  <text src=\"{}\"/>\n", escape_attr(&par.text_src),);
+    let _ = write!(s, "{pad}  <text src=\"{}\"/>\n", escape_attr(&par.text_src));
     let _ = write!(
         s,
         "{pad}  <audio src=\"{src}\" clipBegin=\"{begin}\" clipEnd=\"{end}\"/>\n",
