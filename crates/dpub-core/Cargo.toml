@@ -1,0 +1,16 @@
+[package]
+name = "dpub-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DAISY 2.02 parser and in-memory model"
+
+[lints]
+workspace = true
+
+[dependencies]
+quick-xml = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
