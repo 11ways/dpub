@@ -43,6 +43,11 @@ enum Command {
         /// `--transcribe`.
         #[arg(long)]
         whisper_model: Option<PathBuf>,
+        /// Emit one `<p>` per Whisper segment instead of merging into
+        /// prose-shaped paragraphs. Useful for debugging the raw model
+        /// output; not recommended for distribution.
+        #[arg(long)]
+        no_text_cleanup: bool,
     },
     /// Validate an existing EPUB 3 publication with EPUBCheck.
     Validate {
@@ -89,6 +94,7 @@ fn main() -> Result<()> {
             bitrate,
             transcribe,
             whisper_model,
+            no_text_cleanup,
         } => cmd_convert(
             &ncc,
             &output,
@@ -97,11 +103,13 @@ fn main() -> Result<()> {
             bitrate,
             transcribe,
             whisper_model,
+            no_text_cleanup,
         ),
         Command::Validate { epub } => cmd_validate(&epub),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_convert(
     ncc: &std::path::Path,
     output: &std::path::Path,
@@ -110,6 +118,7 @@ fn cmd_convert(
     bitrate_kbps: u32,
     transcribe: Option<String>,
     whisper_model: Option<PathBuf>,
+    no_text_cleanup: bool,
 ) -> Result<()> {
     let ncc = resolve_ncc_path(ncc)?;
     let book = Book::from_ncc(&ncc).with_context(|| format!("loading {}", ncc.display()))?;
@@ -159,6 +168,7 @@ fn cmd_convert(
     let opts = dpub_convert::ConvertOptions {
         audio: audio.into_format(bitrate_kbps),
         transcribe: transcribe_opts,
+        raw_transcript_segments: no_text_cleanup,
     };
     let start = std::time::Instant::now();
     dpub_convert::convert_to_file(&book, output, &opts)
