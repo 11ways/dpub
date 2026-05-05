@@ -112,7 +112,7 @@ fn cmd_convert(
         audio: audio.into_format(bitrate_kbps),
     };
     let start = std::time::Instant::now();
-    dpub_convert::convert_to_file_with_options(&book, output, opts)
+    dpub_convert::convert_to_file(&book, output, opts)
         .with_context(|| format!("writing {}", output.display()))?;
     let elapsed = start.elapsed();
     let bytes = std::fs::metadata(output).map_or(0, |m| m.len());

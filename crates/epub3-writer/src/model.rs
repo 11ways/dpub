@@ -90,15 +90,24 @@ pub struct ContentDocument {
 pub struct MediaOverlay {
     /// Path inside the EPUB ZIP, relative to the OPF (e.g. `media-overlays/section-001.smil`).
     pub href: String,
-    /// Total duration, in seconds, of this overlay (sum of all clip durations).
+    /// Total duration of this overlay in seconds (sum of every audio clip
+    /// span). Surfaced in the OPF as a `<meta property="media:duration"
+    /// refines="#…-overlay">` element — required by EPUB 3 when the overlay
+    /// is referenced from a manifest item.
     pub duration_seconds: f64,
+    /// Root `<seq>` of the overlay. Children are usually flat lists of
+    /// `<par>`s (one per text-anchor sync point), but nested `<seq>`s are
+    /// allowed to mirror the SMIL grammar.
     pub root: OverlaySeq,
 }
 
 /// EPUB 3 Media Overlays `<seq>`.
 #[derive(Debug, Clone, Default)]
 pub struct OverlaySeq {
-    /// `epub:textref` attribute (typically the content-document href, sometimes anchor).
+    /// Value emitted as the `epub:textref` attribute. Must be a path
+    /// relative to *the SMIL file's location* (so for a SMIL at
+    /// `EPUB/media-overlays/foo.smil` pointing at `EPUB/foo.xhtml`, the
+    /// value is `../foo.xhtml`). EPUBCheck will fail if this is wrong.
     pub textref: Option<String>,
     pub children: Vec<OverlayItem>,
 }
@@ -173,5 +182,71 @@ impl Publication {
             return Err(crate::Error::InvalidPublication("no sections".into()));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal() -> Publication {
+        Publication {
+            metadata: PackageMetadata {
+                identifier: "urn:uuid:0".into(),
+                title: "T".into(),
+                language: "en".into(),
+                modified: String::new(),
+                ..Default::default()
+            },
+            nav: Nav::default(),
+            sections: vec![SectionPart {
+                id: "s1".into(),
+                content: ContentDocument {
+                    href: "s1.xhtml".into(),
+                    title: "T".into(),
+                    language: "en".into(),
+                    body_xhtml: String::new(),
+                },
+                overlay: None,
+            }],
+            audio_files: vec![],
+        }
+    }
+
+    #[test]
+    fn validate_accepts_minimal_publication() {
+        assert!(minimal().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_empty_identifier() {
+        let mut p = minimal();
+        p.metadata.identifier.clear();
+        let err = p.validate().unwrap_err().to_string();
+        assert!(err.contains("identifier"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_empty_title() {
+        let mut p = minimal();
+        p.metadata.title.clear();
+        let err = p.validate().unwrap_err().to_string();
+        assert!(err.contains("title"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_empty_language() {
+        let mut p = minimal();
+        p.metadata.language.clear();
+        let err = p.validate().unwrap_err().to_string();
+        assert!(err.contains("language"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_no_sections() {
+        let mut p = minimal();
+        p.sections.clear();
+        let err = p.validate().unwrap_err().to_string();
+        assert!(err.contains("section"), "{err}");
     }
 }

@@ -301,4 +301,46 @@ mod tests {
         let parsed = Ncc::parse_bytes(ncc, Path::new("ncc.html")).unwrap();
         assert_eq!(parsed.metadata.title.as_deref(), Some("Café"));
     }
+
+    #[test]
+    fn meta_without_content_is_skipped_not_panicking() {
+        // Real NCC out in the wild occasionally has empty/half-baked meta
+        // tags. We should ignore them rather than panic.
+        let ncc = r#"<?xml version="1.0" encoding="utf-8"?>
+<html><head>
+<meta name="dc:title"/>
+<meta content="orphan-content"/>
+<meta name="dc:title" content="Real Title"/>
+</head>
+<body><h1 id="h1"><a href="x.smil#a">x</a></h1></body></html>"#;
+        let parsed = Ncc::parse_bytes(ncc.as_bytes(), Path::new("ncc.html")).unwrap();
+        assert_eq!(parsed.metadata.title.as_deref(), Some("Real Title"));
+    }
+
+    #[test]
+    fn ncc_without_head_still_parses_navigation() {
+        // No <head> at all: we get no metadata but the nav block still has
+        // to come through cleanly.
+        let ncc = r#"<?xml version="1.0" encoding="utf-8"?>
+<html><body>
+<h1 id="h1"><a href="ptk001.smil#b1">Only Heading</a></h1>
+</body></html>"#;
+        let parsed = Ncc::parse_bytes(ncc.as_bytes(), Path::new("ncc.html")).unwrap();
+        assert_eq!(parsed.metadata.title, None);
+        assert_eq!(parsed.headings().count(), 1);
+    }
+
+    #[test]
+    fn windows_1252_high_byte_decodes() {
+        // 0x80..=0x9F differs between ISO-8859-1 and windows-1252; the
+        // bytewise mapping we use treats them as Latin-1 control chars
+        // which is acceptable for "good enough" v1 — we just want to assert
+        // that the parser doesn't bail.
+        let ncc = b"<?xml version=\"1.0\" encoding=\"windows-1252\"?>
+<html><head><meta name=\"dc:title\" content=\"X\x80Y\"/></head><body><h1 id=\"h1\"><a href=\"x.smil#a\">x</a></h1></body></html>";
+        let parsed = Ncc::parse_bytes(ncc, Path::new("ncc.html")).unwrap();
+        let title = parsed.metadata.title.expect("title");
+        assert!(title.starts_with('X'));
+        assert!(title.ends_with('Y'));
+    }
 }

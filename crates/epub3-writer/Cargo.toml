@@ -11,6 +11,7 @@ description = "Builder and serialiser for accessible EPUB 3 publications with Me
 workspace = true
 
 [dependencies]
+dpub-util = { path = "../dpub-util", version = "0.1.0-dev" }
 zip = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }

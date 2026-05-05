@@ -44,7 +44,8 @@ fn converts_real_book_to_epub() {
     assert_eq!(publication.sections.len(), book.sections.len());
     assert_eq!(publication.audio_files.len(), book.audio_files().len());
 
-    dpub_convert::convert_to_file(&book, &epub_path).expect("write epub");
+    dpub_convert::convert_to_file(&book, &epub_path, dpub_convert::ConvertOptions::default())
+        .expect("write epub");
 
     let bytes = std::fs::metadata(&epub_path).expect("stat").len();
     assert!(bytes > 0, "epub is empty");
@@ -68,7 +69,8 @@ fn epubcheck_clean_on_real_book() {
     let dir = tempfile::tempdir().expect("tempdir");
     let epub_path = dir.path().join("converted.epub");
 
-    dpub_convert::convert_to_file(&book, &epub_path).expect("write epub");
+    dpub_convert::convert_to_file(&book, &epub_path, dpub_convert::ConvertOptions::default())
+        .expect("write epub");
 
     let output = Command::new(&epubcheck)
         .arg(&epub_path)
@@ -108,8 +110,9 @@ fn opus_recompression_shrinks_real_book() {
     let original = dir.path().join("original.epub");
     let opus = dir.path().join("opus.epub");
 
-    dpub_convert::convert_to_file(&book, &original).expect("write original");
-    dpub_convert::convert_to_file_with_options(
+    dpub_convert::convert_to_file(&book, &original, dpub_convert::ConvertOptions::default())
+        .expect("write original");
+    dpub_convert::convert_to_file(
         &book,
         &opus,
         dpub_convert::ConvertOptions {

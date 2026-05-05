@@ -13,7 +13,7 @@
 //! a second deflate pass.
 
 use std::io::{Read, Seek, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use zip::CompressionMethod;
@@ -54,51 +54,67 @@ impl Publication {
         let mimetype_opts = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Stored)
             .last_modified_time(zip::DateTime::default());
-        zip.start_file("mimetype", mimetype_opts)?;
-        zip.write_all(b"application/epub+zip")?;
+        write_entry(&mut zip, "mimetype", b"application/epub+zip", mimetype_opts)?;
 
         let deflate_opts = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(6));
 
         // 2. META-INF/container.xml
-        zip.start_file("META-INF/container.xml", deflate_opts)?;
-        zip.write_all(write_container_xml(OPF_PATH_IN_ZIP).as_bytes())?;
+        write_entry(
+            &mut zip,
+            "META-INF/container.xml",
+            write_container_xml(OPF_PATH_IN_ZIP).as_bytes(),
+            deflate_opts,
+        )?;
 
         // 3. EPUB/package.opf
-        zip.start_file(OPF_PATH_IN_ZIP, deflate_opts)?;
-        zip.write_all(write_package_opf(&publication).as_bytes())?;
+        write_entry(
+            &mut zip,
+            OPF_PATH_IN_ZIP,
+            write_package_opf(&publication).as_bytes(),
+            deflate_opts,
+        )?;
 
         // 4. EPUB/nav.xhtml
-        zip.start_file(format!("EPUB/{NAV_HREF}"), deflate_opts)?;
-        zip.write_all(
-            write_nav_xhtml(
-                &publication.nav,
-                &publication.metadata.language,
-                &publication.metadata.title,
-            )
-            .as_bytes(),
-        )?;
+        let nav_path = format!("EPUB/{NAV_HREF}");
+        let nav_xhtml = write_nav_xhtml(
+            &publication.nav,
+            &publication.metadata.language,
+            &publication.metadata.title,
+        );
+        write_entry(&mut zip, &nav_path, nav_xhtml.as_bytes(), deflate_opts)?;
 
         // 5. EPUB/<content xhtml> for each section
         for section in &publication.sections {
-            zip.start_file(format!("EPUB/{}", section.content.href), deflate_opts)?;
-            zip.write_all(write_content_xhtml(&section.content).as_bytes())?;
+            let path = format!("EPUB/{}", section.content.href);
+            write_entry(
+                &mut zip,
+                &path,
+                write_content_xhtml(&section.content).as_bytes(),
+                deflate_opts,
+            )?;
         }
 
         // 6. EPUB/<overlay smil> for each section that has one
         for section in &publication.sections {
             if let Some(overlay) = &section.overlay {
-                zip.start_file(format!("EPUB/{}", overlay.href), deflate_opts)?;
-                zip.write_all(write_overlay_smil(overlay).as_bytes())?;
+                let path = format!("EPUB/{}", overlay.href);
+                write_entry(
+                    &mut zip,
+                    &path,
+                    write_overlay_smil(overlay).as_bytes(),
+                    deflate_opts,
+                )?;
             }
         }
 
         // 7. EPUB/audio/* — Stored (no extra deflate over already-compressed audio)
         let audio_opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
         for audio in &publication.audio_files {
-            zip.start_file(format!("EPUB/{}", audio.href), audio_opts)?;
-            stream_into_zip(&mut zip, &audio.source_path)?;
+            let path = format!("EPUB/{}", audio.href);
+            zip.start_file(&path, audio_opts)?;
+            stream_into_zip(&mut zip, &audio.source_path, &path)?;
         }
 
         zip.finish()?;
@@ -106,7 +122,32 @@ impl Publication {
     }
 }
 
-fn stream_into_zip<W: Write + Seek>(zip: &mut ZipWriter<W>, src: &Path) -> Result<()> {
+/// Start a ZIP entry and write `data` into it, mapping `io::Error` to
+/// [`Error::Io`] with the entry's ZIP-internal path.
+///
+/// Centralising this means callers don't accidentally lose the path
+/// context when writing fails — the previous design had a separate
+/// `ZipIo(#[from] io::Error)` variant that erased the path because
+/// `?` always picked the bare-`io::Error` conversion over the
+/// contextualised one.
+fn write_entry<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    zip_path: &str,
+    data: &[u8],
+    opts: SimpleFileOptions,
+) -> Result<()> {
+    zip.start_file(zip_path, opts)?;
+    zip.write_all(data).map_err(|source| Error::Io {
+        path: PathBuf::from(zip_path),
+        source,
+    })
+}
+
+fn stream_into_zip<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    src: &Path,
+    zip_path: &str,
+) -> Result<()> {
     let mut f = std::fs::File::open(src).map_err(|source| Error::Io {
         path: src.to_path_buf(),
         source,
@@ -120,7 +161,10 @@ fn stream_into_zip<W: Write + Seek>(zip: &mut ZipWriter<W>, src: &Path) -> Resul
         if n == 0 {
             break;
         }
-        zip.write_all(&buf[..n])?;
+        zip.write_all(&buf[..n]).map_err(|source| Error::Io {
+            path: PathBuf::from(zip_path),
+            source,
+        })?;
     }
     Ok(())
 }

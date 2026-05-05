@@ -5,6 +5,7 @@ members = [
     "crates/dpub-core",
     "crates/dpub-cli",
     "crates/dpub-convert",
+    "crates/dpub-util",
     "crates/dpub-validate",
     "crates/epub3-writer",
 ]
@@ -31,6 +32,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid = { version = "1", features = ["v4"] }
 serde_json = "1"
 which = "7"
+rayon = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -126,4 +126,19 @@ mod tests {
         let reformatted = format_clock_value(parsed);
         assert_eq!(reformatted, original);
     }
+
+    #[test]
+    fn boundary_values() {
+        // Zero, very-long durations, sub-millisecond fractions, and the "no
+        // unit" timecount form. None of these should panic or saturate.
+        approx(parse_clock_value("0").unwrap(), 0.0);
+        approx(parse_clock_value("0s").unwrap(), 0.0);
+        approx(parse_clock_value("npt=0.000s").unwrap(), 0.0);
+        approx(parse_clock_value("1234567.890s").unwrap(), 1_234_567.890);
+        approx(parse_clock_value("999:59:59.999").unwrap(), 3_599_999.999);
+        // Negative values: SMIL forbids them, but we accept the parse and let
+        // higher layers decide. A round-trip of `-1.0s` would be ambiguous in
+        // `format_clock_value` (which clamps to >= 0) — that is intentional.
+        approx(parse_clock_value("-5s").unwrap(), -5.0);
+    }
 }

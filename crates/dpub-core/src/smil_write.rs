@@ -11,6 +11,8 @@
 
 use std::fmt::Write as _;
 
+use dpub_util::xml::escape_attr;
+
 use crate::smil::{
     AudioClip, MasterSmil, ParChild, SectionRef, SectionSmil, SeqChild, SmilMetadata, SmilPar,
     SmilSeq, TextRef,
@@ -151,20 +153,6 @@ fn write_audio(out: &mut String, a: &AudioClip, level: usize) {
         let _ = write!(out, r#" id="{}""#, escape_attr(id));
     }
     out.push_str("/>\n");
-}
-
-fn escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
