@@ -75,6 +75,28 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Convert every DAISY 2.02 book under `<input>` to EPUB 3, in
+    /// parallel. A "book" is any directory containing an `ncc.html`.
+    /// Writes a JSON summary to stdout when finished. Per-book errors
+    /// are recorded in the summary, not raised — one bad book never
+    /// halts the queue.
+    Batch {
+        /// Directory to scan for DAISY 2.02 books (recursively).
+        input: PathBuf,
+        /// Directory to write `.epub` files to. Created if missing.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Number of conversions to run in parallel. `0` (default) lets
+        /// rayon pick (typically the CPU count).
+        #[arg(short, long, default_value_t = 0)]
+        jobs: usize,
+        /// Audio handling: keep originals or recompress to Opus.
+        #[arg(long, value_enum, default_value_t = AudioOpt::Original)]
+        audio: AudioOpt,
+        /// Bitrate (kbit/s) when --audio=opus. Sensible range: 32–96 for speech.
+        #[arg(long, default_value_t = dpub_audio::DEFAULT_OPUS_BITRATE_KBPS)]
+        bitrate: u32,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -132,6 +154,13 @@ fn main() -> Result<()> {
         ),
         Command::Validate { epub, json } => cmd_validate(&epub, json),
         Command::A11y { epub, json } => cmd_a11y(&epub, json),
+        Command::Batch {
+            input,
+            output,
+            jobs,
+            audio,
+            bitrate,
+        } => cmd_batch(&input, &output, jobs, audio, bitrate),
     }
 }
 
@@ -401,6 +430,159 @@ fn format_levels(by_level: &std::collections::BTreeMap<u8, usize>) -> String {
         .map(|(level, count)| format!("h{level}: {count}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[derive(serde::Serialize)]
+struct BatchSummary {
+    /// Number of books discovered under `input`.
+    total: usize,
+    succeeded: usize,
+    failed: usize,
+    /// Wallclock seconds for the whole batch (includes parallelism).
+    wallclock_seconds: f64,
+    books: Vec<BatchEntry>,
+}
+
+#[derive(serde::Serialize)]
+struct BatchEntry {
+    /// Path to the source `ncc.html`.
+    input: String,
+    /// Path to the produced `.epub`. Absent when `status == "error"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<String>,
+    /// `"ok"` or `"error"`.
+    status: &'static str,
+    duration_seconds: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size_mib: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn cmd_batch(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    jobs: usize,
+    audio: AudioOpt,
+    bitrate_kbps: u32,
+) -> Result<()> {
+    use rayon::prelude::*;
+
+    if !input.is_dir() {
+        anyhow::bail!("batch input {} is not a directory", input.display());
+    }
+    std::fs::create_dir_all(output)
+        .with_context(|| format!("creating output dir {}", output.display()))?;
+    if matches!(audio, AudioOpt::Opus) && !dpub_audio::ffmpeg_available() {
+        anyhow::bail!("ffmpeg is not on PATH; install it (e.g. `brew install ffmpeg`) and retry");
+    }
+
+    // Walk for ncc.html (case-insensitive). Each match identifies one book.
+    let books: Vec<PathBuf> = walkdir::WalkDir::new(input)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|e| {
+            e.file_type().is_file()
+                && e.file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("ncc.html")
+        })
+        .map(walkdir::DirEntry::into_path)
+        .collect();
+
+    if books.is_empty() {
+        eprintln!(
+            "no DAISY books (no `ncc.html`) found under {}",
+            input.display()
+        );
+        let summary = BatchSummary {
+            total: 0,
+            succeeded: 0,
+            failed: 0,
+            wallclock_seconds: 0.0,
+            books: vec![],
+        };
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+
+    eprintln!("Batch: {} book(s) under {}", books.len(), input.display());
+
+    // Configure the rayon pool size.
+    if jobs > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(jobs)
+            .build_global()
+            .ok(); // ignore "already initialised"
+    }
+
+    let opts = dpub_convert::ConvertOptions {
+        audio: audio.into_format(bitrate_kbps),
+        transcribe: None,
+        raw_transcript_segments: false,
+        cover: None,
+    };
+    let start = std::time::Instant::now();
+    let entries: Vec<BatchEntry> = books
+        .par_iter()
+        .map(|ncc_path| {
+            let book_start = std::time::Instant::now();
+            let stem = ncc_path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map_or_else(|| "book".to_owned(), |s| s.to_string_lossy().into_owned());
+            let epub_path = output.join(format!("{stem}.epub"));
+            let result = (|| -> std::result::Result<(), anyhow::Error> {
+                let book = dpub_core::Book::from_ncc(ncc_path)?;
+                dpub_convert::convert_to_file(&book, &epub_path, &opts)?;
+                Ok(())
+            })();
+            let duration = book_start.elapsed().as_secs_f64();
+            match result {
+                Ok(()) => {
+                    let size_bytes = std::fs::metadata(&epub_path).map_or(0, |m| m.len());
+                    #[allow(clippy::cast_precision_loss)]
+                    let mib = size_bytes as f64 / 1_048_576.0;
+                    eprintln!("  ✓ {} → {} ({mib:.1} MiB, {duration:.1}s)", ncc_path.display(), epub_path.display());
+                    BatchEntry {
+                        input: ncc_path.display().to_string(),
+                        output: Some(epub_path.display().to_string()),
+                        status: "ok",
+                        duration_seconds: duration,
+                        size_mib: Some(mib),
+                        error: None,
+                    }
+                }
+                Err(err) => {
+                    eprintln!("  ✗ {}: {err:#}", ncc_path.display());
+                    BatchEntry {
+                        input: ncc_path.display().to_string(),
+                        output: None,
+                        status: "error",
+                        duration_seconds: duration,
+                        size_mib: None,
+                        error: Some(format!("{err:#}")),
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let succeeded = entries.iter().filter(|e| e.status == "ok").count();
+    let failed = entries.len() - succeeded;
+    let summary = BatchSummary {
+        total: entries.len(),
+        succeeded,
+        failed,
+        wallclock_seconds: start.elapsed().as_secs_f64(),
+        books: entries,
+    };
+    println!("{}", serde_json::to_string_pretty(&summary)?);
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 /// Accept either an `ncc.html` file directly, or a directory containing one.
