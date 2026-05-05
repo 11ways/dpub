@@ -28,6 +28,10 @@ enum Command {
         /// Run EPUBCheck against the produced file and report any issues.
         #[arg(long)]
         validate: bool,
+        /// Run DAISY ACE accessibility checks against the produced file and
+        /// report any issues. Requires `ace` on PATH (`npm install -g @daisy/ace`).
+        #[arg(long)]
+        a11y: bool,
         /// Audio handling: keep originals or recompress to Opus.
         #[arg(long, value_enum, default_value_t = AudioOpt::Original)]
         audio: AudioOpt,
@@ -55,6 +59,12 @@ enum Command {
     /// Validate an existing EPUB 3 publication with EPUBCheck.
     Validate {
         /// Path to the `.epub` file to validate.
+        epub: PathBuf,
+    },
+    /// Run accessibility checks (DAISY ACE) on an existing EPUB 3 publication.
+    /// Requires `ace` on PATH (`npm install -g @daisy/ace`).
+    A11y {
+        /// Path to the `.epub` file to check.
         epub: PathBuf,
     },
 }
@@ -93,6 +103,7 @@ fn main() -> Result<()> {
             ncc,
             output,
             validate,
+            a11y,
             audio,
             bitrate,
             transcribe,
@@ -103,6 +114,7 @@ fn main() -> Result<()> {
             &ncc,
             &output,
             validate,
+            a11y,
             audio,
             bitrate,
             transcribe,
@@ -111,6 +123,7 @@ fn main() -> Result<()> {
             cover,
         ),
         Command::Validate { epub } => cmd_validate(&epub),
+        Command::A11y { epub } => cmd_a11y(&epub),
     }
 }
 
@@ -119,6 +132,7 @@ fn cmd_convert(
     ncc: &std::path::Path,
     output: &std::path::Path,
     validate: bool,
+    a11y: bool,
     audio: AudioOpt,
     bitrate_kbps: u32,
     transcribe: Option<String>,
@@ -204,6 +218,10 @@ fn cmd_convert(
         println!();
         cmd_validate(output)?;
     }
+    if a11y {
+        println!();
+        cmd_a11y(output)?;
+    }
     Ok(())
 }
 
@@ -213,8 +231,13 @@ fn cmd_validate(epub: &std::path::Path) -> Result<()> {
             "epubcheck is not on PATH; install it (e.g. `brew install epubcheck`) and retry"
         );
     }
-    let report = dpub_validate::validate_epub(epub)
-        .with_context(|| format!("validating {}", epub.display()))?;
+    let report = dpub_validate::Report {
+        epubcheck: Some(
+            dpub_validate::run_epubcheck(epub)
+                .with_context(|| format!("validating {}", epub.display()))?,
+        ),
+        ace: None,
+    };
     print_report(&report);
     if !report.is_clean() {
         anyhow::bail!("validation reported errors");
@@ -222,20 +245,49 @@ fn cmd_validate(epub: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+fn cmd_a11y(epub: &std::path::Path) -> Result<()> {
+    if !dpub_validate::ace_available() {
+        anyhow::bail!(
+            "ace is not on PATH; install it with `npm install -g @daisy/ace` and retry"
+        );
+    }
+    let report = dpub_validate::Report {
+        epubcheck: None,
+        ace: Some(
+            dpub_validate::run_ace(epub)
+                .with_context(|| format!("running ace on {}", epub.display()))?,
+        ),
+    };
+    print_report(&report);
+    if !report.is_clean() {
+        anyhow::bail!("accessibility checker reported errors");
+    }
+    Ok(())
+}
+
 fn print_report(report: &dpub_validate::Report) {
-    let Some(epubcheck) = &report.epubcheck else {
+    if report.epubcheck.is_none() && report.ace.is_none() {
         println!("No validators ran.");
         return;
-    };
+    }
+    if let Some(b) = &report.epubcheck {
+        print_backend("EPUBCheck", b);
+    }
+    if let Some(b) = &report.ace {
+        print_backend("ACE", b);
+    }
+}
+
+fn print_backend(label: &str, report: &dpub_validate::BackendReport) {
     println!(
-        "EPUBCheck {}: {} fatals / {} errors / {} warnings / {} usages",
-        epubcheck.version.as_deref().unwrap_or("?"),
-        epubcheck.summary.fatals,
-        epubcheck.summary.errors,
-        epubcheck.summary.warnings,
-        epubcheck.summary.infos,
+        "{label} {}: {} fatals / {} errors / {} warnings / {} usages",
+        report.version.as_deref().unwrap_or("?"),
+        report.summary.fatals,
+        report.summary.errors,
+        report.summary.warnings,
+        report.summary.infos,
     );
-    for issue in &epubcheck.issues {
+    for issue in &report.issues {
         println!(
             "  [{sev}] {id} {loc}{msg}",
             sev = issue.severity.as_str(),
