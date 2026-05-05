@@ -5,6 +5,9 @@ Cargo.lock.bak
 # Build outputs from manual `dpub convert` runs
 *.epub
 
+# Per-session Claude Code state
+.claude/
+
 # Editor / OS
 .DS_Store
 .idea/
