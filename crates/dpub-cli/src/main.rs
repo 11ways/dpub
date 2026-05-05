@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use dpub_core::{Book, NavItem};
 
 #[derive(Parser)]
@@ -28,12 +28,35 @@ enum Command {
         /// Run EPUBCheck against the produced file and report any issues.
         #[arg(long)]
         validate: bool,
+        /// Audio handling: keep originals or recompress to Opus.
+        #[arg(long, value_enum, default_value_t = AudioOpt::Original)]
+        audio: AudioOpt,
+        /// Bitrate (kbit/s) when --audio=opus. Sensible range: 32–96 for speech.
+        #[arg(long, default_value_t = dpub_audio::DEFAULT_OPUS_BITRATE_KBPS)]
+        bitrate: u32,
     },
     /// Validate an existing EPUB 3 publication with EPUBCheck.
     Validate {
         /// Path to the `.epub` file to validate.
         epub: PathBuf,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AudioOpt {
+    /// Embed source MP3s unchanged.
+    Original,
+    /// Re-encode every audio file to Ogg/Opus (requires `ffmpeg` on PATH).
+    Opus,
+}
+
+impl AudioOpt {
+    fn into_format(self, bitrate_kbps: u32) -> dpub_convert::AudioFormat {
+        match self {
+            AudioOpt::Original => dpub_convert::AudioFormat::Original,
+            AudioOpt::Opus => dpub_convert::AudioFormat::Opus { bitrate_kbps },
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -53,12 +76,20 @@ fn main() -> Result<()> {
             ncc,
             output,
             validate,
-        } => cmd_convert(&ncc, &output, validate),
+            audio,
+            bitrate,
+        } => cmd_convert(&ncc, &output, validate, audio, bitrate),
         Command::Validate { epub } => cmd_validate(&epub),
     }
 }
 
-fn cmd_convert(ncc: &std::path::Path, output: &std::path::Path, validate: bool) -> Result<()> {
+fn cmd_convert(
+    ncc: &std::path::Path,
+    output: &std::path::Path,
+    validate: bool,
+    audio: AudioOpt,
+    bitrate_kbps: u32,
+) -> Result<()> {
     let book = Book::from_ncc(ncc).with_context(|| format!("loading {}", ncc.display()))?;
     println!("Converting {} → {}", ncc.display(), output.display());
     println!(
@@ -68,8 +99,20 @@ fn cmd_convert(ncc: &std::path::Path, output: &std::path::Path, validate: bool) 
         book.total_audio_clip_count(),
         format_duration(book.total_audio_seconds()),
     );
+    if matches!(audio, AudioOpt::Opus) {
+        if !dpub_audio::ffmpeg_available() {
+            anyhow::bail!(
+                "ffmpeg is not on PATH; install it (e.g. `brew install ffmpeg`) and retry"
+            );
+        }
+        println!("  Audio: Opus @ {bitrate_kbps} kbit/s (re-encoding)");
+    }
+
+    let opts = dpub_convert::ConvertOptions {
+        audio: audio.into_format(bitrate_kbps),
+    };
     let start = std::time::Instant::now();
-    dpub_convert::convert_to_file(&book, output)
+    dpub_convert::convert_to_file_with_options(&book, output, opts)
         .with_context(|| format!("writing {}", output.display()))?;
     let elapsed = start.elapsed();
     let bytes = std::fs::metadata(output).map_or(0, |m| m.len());

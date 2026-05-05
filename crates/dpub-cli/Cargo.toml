@@ -15,6 +15,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+dpub-audio = { path = "../dpub-audio", version = "0.1.0-dev" }
 dpub-core = { path = "../dpub-core", version = "0.1.0-dev" }
 dpub-convert = { path = "../dpub-convert", version = "0.1.0-dev" }
 dpub-validate = { path = "../dpub-validate", version = "0.1.0-dev" }

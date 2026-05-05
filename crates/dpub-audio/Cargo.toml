@@ -1,0 +1,18 @@
+[package]
+name = "dpub-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Audio (re-)encoding for the dpub toolkit, currently via the system ffmpeg binary"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+which = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

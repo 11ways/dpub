@@ -503,9 +503,51 @@ fn escape(s: &str) -> String {
     out
 }
 
+/// Audio handling for the converted publication.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum AudioFormat {
+    /// Embed the source audio files unchanged. Default.
+    #[default]
+    Original,
+    /// Re-encode every distinct source audio file to Ogg/Opus at the given
+    /// bitrate (kbit/s). The Media Overlay timing references stay in
+    /// seconds, so they continue to point at the same temporal location
+    /// after re-encoding.
+    Opus { bitrate_kbps: u32 },
+}
+
+/// Knobs for [`convert_with_options`] / [`convert_to_file_with_options`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ConvertOptions {
+    pub audio: AudioFormat,
+}
+
 /// Convert and write a DAISY 2.02 publication to an EPUB 3 file in one call.
+///
+/// Equivalent to [`convert_to_file_with_options`] with default options:
+/// audio passed through unchanged.
 pub fn convert_to_file(book: &Book, output: &Path) -> Result<()> {
-    let publication = convert(book)?;
+    convert_to_file_with_options(book, output, ConvertOptions::default())
+}
+
+/// Same as [`convert_to_file`] but with explicit options. Set
+/// `opts.audio = AudioFormat::Opus { … }` to recompress audio.
+pub fn convert_to_file_with_options(
+    book: &Book,
+    output: &Path,
+    opts: ConvertOptions,
+) -> Result<()> {
+    let mut publication = convert(book)?;
+
+    // Recompression has to happen *before* the ZIP write because the writer
+    // streams audio bytes from `source_path` directly into the archive.
+    let _scratch = match opts.audio {
+        AudioFormat::Original => None,
+        AudioFormat::Opus { bitrate_kbps } => {
+            Some(recompress_audio_to_opus(&mut publication, bitrate_kbps)?)
+        }
+    };
+
     if let Some(parent) = output.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -520,4 +562,76 @@ pub fn convert_to_file(book: &Book, output: &Path) -> Result<()> {
     })?;
     publication.write_zip(&mut f)?;
     Ok(())
+}
+
+/// Re-encode every audio file in the publication to Ogg/Opus, mutating the
+/// publication's audio entries and overlay references in place.
+///
+/// Returns the [`tempfile::TempDir`] that holds the recompressed files.
+/// The caller has to keep it alive until the publication has been written
+/// (the audio bytes are streamed from disk during `write_zip`).
+fn recompress_audio_to_opus(
+    publication: &mut Publication,
+    bitrate_kbps: u32,
+) -> Result<tempfile::TempDir> {
+    let scratch = tempfile::tempdir().map_err(|source| Error::Io {
+        path: std::env::temp_dir(),
+        source,
+    })?;
+
+    // Map of original ZIP href → new (href, source_path).
+    let mut renames: std::collections::HashMap<String, (String, std::path::PathBuf)> =
+        std::collections::HashMap::new();
+
+    for audio in &mut publication.audio_files {
+        let original_href = audio.href.clone();
+        let new_href = swap_extension(&audio.href, "opus");
+        let new_source = scratch.path().join(
+            std::path::Path::new(&new_href)
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("audio.opus")),
+        );
+
+        dpub_audio::recompress_to_opus(&audio.source_path, &new_source, bitrate_kbps)
+            .map_err(Error::Audio)?;
+
+        renames.insert(
+            original_href.clone(),
+            (new_href.clone(), new_source.clone()),
+        );
+
+        audio.href = new_href;
+        audio.source_path = new_source;
+        audio.media_type = "audio/ogg; codecs=opus".into();
+    }
+
+    // Patch every Media Overlay's audio_src to point at the new file.
+    // The overlay refs are paths relative to the SMIL location, of the form
+    // "../audio/foo.mp3". Just strip the basename and rewrite the extension.
+    for section in &mut publication.sections {
+        if let Some(overlay) = section.overlay.as_mut() {
+            rewrite_overlay_audio_refs(&mut overlay.root);
+        }
+    }
+
+    Ok(scratch)
+}
+
+fn swap_extension(href: &str, new_ext: &str) -> String {
+    let mut path = std::path::PathBuf::from(href);
+    path.set_extension(new_ext);
+    // PathBuf may use platform-specific separators; we want forward slashes
+    // because `href` is a ZIP-internal path.
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn rewrite_overlay_audio_refs(seq: &mut OverlaySeq) {
+    for child in &mut seq.children {
+        match child {
+            OverlayItem::Par(par) => {
+                par.audio_src = swap_extension(&par.audio_src, "opus");
+            }
+            OverlayItem::Seq(inner) => rewrite_overlay_audio_refs(inner),
+        }
+    }
 }

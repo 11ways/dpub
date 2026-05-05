@@ -56,7 +56,7 @@ SMIL:
 | **M2** | Minimal EPUB 3 writer (audio-only with Media Overlays). EPUBCheck-clean. ✅ |
 | **M3** | End-to-end: `dpub convert <ncc.html> -o out.epub`. ✅ |
 | **M4** | Built-in validation (EPUBCheck + ACE) — `dpub validate`. ✅ (EPUBCheck only; ACE deferred) |
-| **M5** | Audio recompression (MP3 → Opus). |
+| **M5** | Audio recompression (MP3 → Opus) — `dpub convert --audio opus --bitrate <kbps>`. ✅ |
 | **M6** | Whisper transcription for audio-only books. |
 | **M7** | WASM build for browser-based conversion. |
 | **M8** | 1.0 release: macOS / Linux / Windows binaries. |
@@ -70,11 +70,12 @@ dpub/
 │   ├── epub3-writer/   # EPUB 3 model + ZIP serialiser (Media Overlays)
 │   ├── dpub-convert/   # DAISY 2.02 → EPUB 3 conversion
 │   ├── dpub-validate/  # EPUBCheck wrapper + structured report
+│   ├── dpub-audio/     # ffmpeg-backed MP3 → Opus re-encoder
 │   └── dpub-cli/       # `dpub` binary
 └── ...
 ```
 
-More crates land as later milestones come online (`dpub-validate`, `dpub-audio`, `dpub-whisper`, `dpub-wasm`).
+More crates land as later milestones come online (`dpub-whisper`, `dpub-wasm`).
 
 ## Contributing
 
