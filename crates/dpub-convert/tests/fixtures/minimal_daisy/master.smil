@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE smil PUBLIC "-//W3C//DTD SMIL 1.0//EN" "http://www.w3.org/TR/REC-smil/SMIL10.dtd">
+<smil>
+<head>
+<meta name="dc:format" content="Daisy 2.02" />
+<meta name="dc:title" content="Synthetic DAISY Test Book" />
+<meta name="ncc:timeInThisSmil" content="00:00:01" />
+<meta name="dc:identifier" content="dpub-fixture-minimal" />
+</head>
+<body>
+<ref title="Synthetic DAISY Test Book" src="ptk000001.smil" id="heading_000001" />
+</body>
+</smil>
