@@ -7,25 +7,30 @@
 ```
 crates/
 ├── dpub-core/      # DAISY 2.02 parser + in-memory model (NCC, master.smil, per-section SMIL)
-├── epub3-writer/   # EPUB 3 ZIP serialiser with Media Overlays
-├── dpub-convert/   # DAISY 2.02 → EPUB 3 (drives the pipeline; --audio, --transcribe live here)
-├── dpub-validate/  # EPUBCheck wrapper (subprocess + JSON parse)
-├── dpub-audio/     # ffmpeg-backed MP3 → Opus re-encoder
-├── dpub-whisper/   # local Whisper transcription via whisper.cpp (FFI)
+├── epub3-writer/   # EPUB 3 ZIP serialiser with Media Overlays + cover-image
+├── dpub-convert/   # DAISY 2.02 → EPUB 3 (drives the pipeline; --audio, --transcribe, --cover, --auto-cover, --rights live here)
+├── dpub-validate/  # EPUBCheck + ACE wrappers (subprocess + JSON parse), serde-stable Report
+├── dpub-audio/     # ffmpeg-backed MP3 → Opus re-encoder (passes -map_metadata 0 to preserve ID3 tags)
+├── dpub-whisper/   # local Whisper transcription via whisper.cpp (FFI). Stateful `Transcriber` reused across files.
+├── dpub-meta/      # external metadata lookup (currently Open Library covers; ureq, sync HTTP)
 ├── dpub-util/      # shared XML escapers (used by 3 crates — don't reinvent)
-└── dpub-cli/       # `dpub` binary
+└── dpub-cli/       # `dpub` binary (subcommands: info, convert, validate, a11y, batch)
 ```
 
 ## Quickstart
 
 ```sh
 cargo build --release
-./target/release/dpub info  /path/to/ncc.html
-./target/release/dpub convert /path/to/ncc.html -o out.epub \
-    [--validate] \
+./target/release/dpub info /path/to/daisy/                          # accepts file or dir
+./target/release/dpub convert /path/to/daisy/ -o out.epub \
+    [--validate] [--a11y] \
     [--audio opus --bitrate 32] \
+    [--cover cover.jpg | --auto-cover] \
+    [--rights "© 2008 …"] \
     [--transcribe nl --whisper-model ~/models/ggml-medium.bin]
-./target/release/dpub validate /path/to/some.epub
+./target/release/dpub validate /path/to/some.epub [--json]
+./target/release/dpub a11y /path/to/some.epub [--json]              # needs `ace` (npm i -g @daisy/ace)
+./target/release/dpub batch /path/to/daisy-books/ -o /path/to/output/ [--jobs N]
 ```
 
 ## Conventions
@@ -42,16 +47,18 @@ cargo build --release
 |---|---|---|---|
 | `cmake` | building `dpub-whisper` (whisper-rs-sys) | `brew install cmake` | **required to build the workspace** |
 | `epubcheck` | `dpub validate`, M2/M4 integration tests | `brew install epubcheck` | needs Java 11 — keep `openjdk@11` on PATH |
+| `ace` | `dpub a11y`, M4 accessibility checks | `npm install -g @daisy/ace` | needs Node.js |
 | `ffmpeg` | `dpub convert --audio opus`, M5 tests | `brew install ffmpeg` | |
 | Whisper GGML model | `dpub convert --transcribe ...` | download from <https://huggingface.co/ggerganov/whisper.cpp> | not bundled; `tiny` 75 MB → `large-v3` 1 GB |
 
 ## Opt-in test env vars
 
 ```sh
-DPUB_TEST_BOOK=/path/to/ncc.html               # real-book parse + e2e tests (dpub-core, dpub-convert)
-DPUB_TEST_OPUS=1                                # full-book Opus encode test (slow — ~minute on M-series with parallel ffmpeg)
-DPUB_TEST_WHISPER_MODEL=/path/to/ggml-tiny.bin  # whisper smoke test (dpub-whisper)
-DPUB_TEST_AUDIO=/path/to/some.mp3               # ↑ paired with this
+DPUB_TEST_BOOK=/path/to/ncc.html                # real-book parse + e2e tests (dpub-core, dpub-convert)
+DPUB_TEST_OPUS=1                                 # full-book Opus encode test (slow — ~minute on M-series with parallel ffmpeg)
+DPUB_TEST_WHISPER_MODEL=/path/to/ggml-tiny.bin   # whisper smoke test (dpub-whisper)
+DPUB_TEST_AUDIO=/path/to/some.mp3                # ↑ paired with this
+DPUB_TEST_OPENLIBRARY=1                          # live cover lookup against Open Library (dpub-meta)
 ```
 
 ## Test fixtures
@@ -62,7 +69,7 @@ DPUB_TEST_AUDIO=/path/to/some.mp3               # ↑ paired with this
 
 ## Roadmap status
 
-See `README.md` for the canonical table. As of this writing: **M0.5–M6 done** (everything in `main`); **M7 (WASM)** and **M8 (1.0 release)** remain.
+See `README.md` for the canonical table. As of this writing: **M0.5–M6 done plus the Tier 1 1.0-readiness items** (Whisper model caching, cover lookup `--cover` + `--auto-cover`, ACE integration `dpub a11y` / `--a11y`, parallel `dpub batch`, stable `--json` output, `--rights` flag, ffmpeg metadata preservation). All on `main`. **M7 (WASM)** and **M8 (1.0 release)** remain. The post-1.0 strategic bet per `.claude/plans/can-you-look-at-quirky-allen.md` is **daemon mode + batch v2**.
 
 ## Known correctness baseline
 
