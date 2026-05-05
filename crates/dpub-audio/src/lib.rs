@@ -61,6 +61,11 @@ pub fn recompress_to_opus(input: &Path, output: &Path, bitrate_kbps: u32) -> Res
             "1", // mono — DAISY narration is monaural
             "-ar",
             "16000", // 16 kHz sample rate is plenty for speech
+            "-map_metadata",
+            "0", // copy container-level metadata (ID3 → Vorbis comments where possible).
+            //   The default is "global metadata, all streams" but we make it explicit
+            //   so future ffmpeg defaults can't quietly strip producer / accessibility
+            //   metadata that legitimately needs to survive into the EPUB audio.
         ])
         .arg(output)
         .status()
