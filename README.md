@@ -57,7 +57,7 @@ SMIL:
 | **M3** | End-to-end: `dpub convert <ncc.html> -o out.epub`. ✅ |
 | **M4** | Built-in validation (EPUBCheck + ACE) — `dpub validate`. ✅ (EPUBCheck only; ACE deferred) |
 | **M5** | Audio recompression (MP3 → Opus) — `dpub convert --audio opus --bitrate <kbps>`. ✅ |
-| **M6** | Whisper transcription for audio-only books. |
+| **M6** | Whisper transcription for audio-only books — `dpub convert --transcribe <lang> --whisper-model <path>`. ✅ |
 | **M7** | WASM build for browser-based conversion. |
 | **M8** | 1.0 release: macOS / Linux / Windows binaries. |
 
@@ -71,12 +71,13 @@ dpub/
 │   ├── dpub-convert/   # DAISY 2.02 → EPUB 3 conversion
 │   ├── dpub-validate/  # EPUBCheck wrapper + structured report
 │   ├── dpub-audio/     # ffmpeg-backed MP3 → Opus re-encoder
+│   ├── dpub-whisper/   # local Whisper transcription (whisper.cpp via FFI)
 │   ├── dpub-util/      # tiny shared utilities (XML escaping)
 │   └── dpub-cli/       # `dpub` binary
 └── ...
 ```
 
-More crates land as later milestones come online (`dpub-whisper`, `dpub-wasm`).
+More crates land as later milestones come online (`dpub-wasm`).
 
 ## Local development
 
@@ -87,8 +88,10 @@ external assets or are slow:
 | --- | --- |
 | `DPUB_TEST_BOOK=/path/to/ncc.html` | Enables the round-trip and conversion tests against a real DAISY book on disk. |
 | `DPUB_TEST_OPUS=1` (with `DPUB_TEST_BOOK`) | Enables the full-book Opus re-encode test (slow — minutes). |
+| `DPUB_TEST_WHISPER_MODEL=/path/ggml-*.bin` and `DPUB_TEST_AUDIO=/path/audio.mp3` | Enable the Whisper smoke test in `dpub-whisper`. Optional `DPUB_TEST_WHISPER_LANG=nl`. |
 | `epubcheck` on `PATH` | The `dpub-validate` and `epub3-writer` integration tests will run EPUBCheck and assert zero errors. They skip silently if the binary is missing. |
 | `ffmpeg` on `PATH` | The `dpub-audio` and Opus re-encoding tests run; they skip silently otherwise. |
+| `cmake` on `PATH` | Required to build `dpub-whisper` (and therefore `dpub-cli` once it depends on it). The `whisper-rs-sys` crate compiles whisper.cpp from source. |
 
 Without any of these, `cargo test` still runs the full unit test suite
 on every platform.

@@ -1,0 +1,25 @@
+[package]
+name = "dpub-whisper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Local Whisper transcription (via whisper.cpp) for filling the text layer of audio-only DAISY books"
+
+[lints]
+workspace = true
+
+[dependencies]
+whisper-rs = { workspace = true }
+symphonia = { workspace = true }
+rubato = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = []
+# Enable Apple-Silicon Metal acceleration in whisper.cpp.
+metal = ["whisper-rs/metal"]
+# Enable NVIDIA CUDA acceleration.
+cuda = ["whisper-rs/cuda"]
