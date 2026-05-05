@@ -26,9 +26,15 @@ use std::path::{Path, PathBuf};
 /// A parsed DAISY 2.02 publication.
 #[derive(Debug)]
 pub struct Book {
+    /// Filesystem directory the publication was loaded from. Used by
+    /// downstream crates (notably [`dpub-convert`]) to resolve audio file
+    /// references inside SMIL clips back to bytes on disk.
     pub root: PathBuf,
+    /// Parsed `ncc.html` — the navigation control centre.
     pub ncc: Ncc,
+    /// Parsed `master.smil` — the publication's spine of section refs.
     pub master: MasterSmil,
+    /// Parsed per-section SMIL files, in `master.references` order.
     pub sections: Vec<SectionSmil>,
 }
 

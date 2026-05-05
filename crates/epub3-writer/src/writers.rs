@@ -6,6 +6,8 @@
 
 use std::fmt::Write as _;
 
+use dpub_util::xml::{escape_attr, escape_text};
+
 use crate::model::{
     AccessMode, ContentDocument, MediaOverlay, Nav, NavListItem, OverlayItem, OverlayPar,
     OverlaySeq, Publication,
@@ -352,33 +354,6 @@ pub fn format_smil_clock(seconds: f64) -> String {
     } else {
         format!("{h}:{m:02}:{s:02}.{ms:03}")
     }
-}
-
-fn escape_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-fn escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

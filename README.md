@@ -71,11 +71,27 @@ dpub/
 │   ├── dpub-convert/   # DAISY 2.02 → EPUB 3 conversion
 │   ├── dpub-validate/  # EPUBCheck wrapper + structured report
 │   ├── dpub-audio/     # ffmpeg-backed MP3 → Opus re-encoder
+│   ├── dpub-util/      # tiny shared utilities (XML escaping)
 │   └── dpub-cli/       # `dpub` binary
 └── ...
 ```
 
 More crates land as later milestones come online (`dpub-whisper`, `dpub-wasm`).
+
+## Local development
+
+A few opt-in environment variables turn on integration tests that need
+external assets or are slow:
+
+| Variable | Effect |
+| --- | --- |
+| `DPUB_TEST_BOOK=/path/to/ncc.html` | Enables the round-trip and conversion tests against a real DAISY book on disk. |
+| `DPUB_TEST_OPUS=1` (with `DPUB_TEST_BOOK`) | Enables the full-book Opus re-encode test (slow — minutes). |
+| `epubcheck` on `PATH` | The `dpub-validate` and `epub3-writer` integration tests will run EPUBCheck and assert zero errors. They skip silently if the binary is missing. |
+| `ffmpeg` on `PATH` | The `dpub-audio` and Opus re-encoding tests run; they skip silently otherwise. |
+
+Without any of these, `cargo test` still runs the full unit test suite
+on every platform.
 
 ## Contributing
 

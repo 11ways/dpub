@@ -11,6 +11,7 @@ description = "DAISY 2.02 parser and in-memory model"
 workspace = true
 
 [dependencies]
+dpub-util = { path = "../dpub-util", version = "0.1.0-dev" }
 quick-xml = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

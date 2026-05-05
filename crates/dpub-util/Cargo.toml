@@ -1,0 +1,13 @@
+[package]
+name = "dpub-util"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tiny shared utilities (XML escaping) used by other dpub crates"
+
+[lints]
+workspace = true
+
+[dependencies]
