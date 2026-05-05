@@ -161,6 +161,15 @@ fn write_opf_manifest(s: &mut String, pub_: &Publication) {
         "    <item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n",
     );
 
+    if let Some(cover) = &pub_.cover {
+        let _ = write!(
+            s,
+            "    <item id=\"cover-image\" href=\"{href}\" media-type=\"{mt}\" properties=\"cover-image\"/>\n",
+            href = escape_attr(&cover.href),
+            mt = escape_attr(&cover.media_type),
+        );
+    }
+
     for section in &pub_.sections {
         let media_overlay_attr = section
             .overlay

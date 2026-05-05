@@ -12,8 +12,8 @@ use std::path::Path;
 use std::process::Command;
 
 use epub3_writer::{
-    AccessMode, AudioFile, ContentDocument, MediaOverlay, Nav, NavListItem, OverlayItem,
-    OverlayPar, OverlaySeq, PackageMetadata, Publication, SectionPart,
+    AccessMode, AudioFile, ContentDocument, CoverImage, MediaOverlay, Nav, NavListItem,
+    OverlayItem, OverlayPar, OverlaySeq, PackageMetadata, Publication, SectionPart,
 };
 
 /// 1.6 KiB of MP3 silence (constant-bitrate, 44.1 kHz mono). Just enough for
@@ -75,8 +75,18 @@ fn build_minimal_pub(audio_path: &Path) -> Publication {
             source_path: audio_path.to_path_buf(),
             media_type: "audio/mpeg".into(),
         }],
+        cover: None,
     }
 }
+
+/// 67-byte 1x1 transparent PNG, the smallest valid PNG file.
+const TINY_PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+    0x42, 0x60, 0x82,
+];
 
 fn write_publication_to(dir: &Path) -> std::path::PathBuf {
     let audio_path = dir.join("tiny.mp3");
@@ -188,6 +198,98 @@ fn epubcheck_clean_when_available() {
     // Even a "successful" epubcheck run can emit warnings; our minimal book
     // shouldn't produce any. Fail loudly if it ever does — easier to keep
     // output clean than to debug warnings six months from now.
+    assert!(
+        !combined.contains("WARNING"),
+        "epubcheck emitted warnings:\n{combined}",
+    );
+}
+
+#[test]
+fn cover_image_is_embedded_and_referenced() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let audio_path = dir.path().join("tiny.mp3");
+    std::fs::write(&audio_path, TINY_MP3).expect("write audio fixture");
+
+    let mut publication = build_minimal_pub(&audio_path);
+    publication.cover = Some(CoverImage {
+        href: "images/cover.png".into(),
+        media_type: "image/png".into(),
+        bytes: TINY_PNG.to_vec(),
+    });
+
+    let epub_path = dir.path().join("with-cover.epub");
+    let mut out = File::create(&epub_path).expect("create");
+    publication.write_zip(&mut out).expect("write");
+
+    let f = File::open(&epub_path).expect("open");
+    let mut archive = zip::ZipArchive::new(f).expect("zip");
+
+    // Cover bytes are present in the ZIP at the expected path.
+    let mut cover_bytes = Vec::new();
+    archive
+        .by_name("EPUB/images/cover.png")
+        .expect("cover entry missing")
+        .read_to_end(&mut cover_bytes)
+        .expect("read cover");
+    assert_eq!(cover_bytes, TINY_PNG);
+
+    // OPF references the cover with `properties="cover-image"`.
+    let mut opf = String::new();
+    archive
+        .by_name("EPUB/package.opf")
+        .expect("opf")
+        .read_to_string(&mut opf)
+        .expect("read opf");
+    assert!(
+        opf.contains("properties=\"cover-image\""),
+        "OPF missing cover-image property:\n{opf}"
+    );
+    assert!(
+        opf.contains("href=\"images/cover.png\""),
+        "OPF missing cover href:\n{opf}"
+    );
+    assert!(
+        opf.contains("media-type=\"image/png\""),
+        "OPF missing cover media-type:\n{opf}"
+    );
+}
+
+#[test]
+fn epubcheck_clean_with_cover_when_available() {
+    let Ok(epubcheck) = which("epubcheck") else {
+        eprintln!("epubcheck not on PATH — skipping");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audio_path = dir.path().join("tiny.mp3");
+    std::fs::write(&audio_path, TINY_MP3).expect("write audio fixture");
+
+    let mut publication = build_minimal_pub(&audio_path);
+    publication.cover = Some(CoverImage {
+        href: "images/cover.png".into(),
+        media_type: "image/png".into(),
+        bytes: TINY_PNG.to_vec(),
+    });
+
+    let epub_path = dir.path().join("with-cover.epub");
+    let mut out = File::create(&epub_path).expect("create");
+    publication.write_zip(&mut out).expect("write");
+
+    let output = Command::new(epubcheck)
+        .arg(&epub_path)
+        .output()
+        .expect("run epubcheck");
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        output.status.success(),
+        "epubcheck reported errors:\n{combined}",
+    );
     assert!(
         !combined.contains("WARNING"),
         "epubcheck emitted warnings:\n{combined}",

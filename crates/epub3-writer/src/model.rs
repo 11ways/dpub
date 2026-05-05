@@ -16,6 +16,25 @@ pub struct Publication {
     pub sections: Vec<SectionPart>,
     pub audio_files: Vec<AudioFile>,
     pub nav: Nav,
+    /// Optional book cover image. Surfaced in the OPF manifest as
+    /// `<item ... properties="cover-image">` per EPUB 3.3 §5.5.4.
+    pub cover: Option<CoverImage>,
+}
+
+/// One book cover image, embedded as a manifest item with the
+/// `cover-image` property. Bytes are held in memory because covers are
+/// small (typically <1 MiB) and held only while the [`Publication`] is
+/// being written.
+#[derive(Debug, Clone)]
+pub struct CoverImage {
+    /// Path inside the EPUB ZIP, relative to the OPF (`EPUB/`). E.g.
+    /// `images/cover.jpg`.
+    pub href: String,
+    /// `image/jpeg` or `image/png`. The writer accepts any IANA image
+    /// media type, but typical covers are one of these two.
+    pub media_type: String,
+    /// Raw image bytes, written verbatim into the ZIP entry.
+    pub bytes: Vec<u8>,
 }
 
 /// Package-level metadata. Only the EPUB 3-required fields plus the
@@ -210,6 +229,7 @@ mod tests {
                 overlay: None,
             }],
             audio_files: vec![],
+            cover: None,
         }
     }
 
