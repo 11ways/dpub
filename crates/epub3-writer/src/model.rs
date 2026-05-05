@@ -56,6 +56,12 @@ pub struct PackageMetadata {
     pub date: Option<String>,
     pub source: Option<String>,
     pub description: Option<String>,
+    /// Free-text rights statement. Emitted as `<dc:rights>` in the OPF
+    /// metadata block. Producers commonly use this to assert copyright
+    /// or to reference the accessibility-exception framework under
+    /// which the book is being distributed (Marrakesh Treaty,
+    /// Belgian / EU exceptions, etc.).
+    pub rights: Option<String>,
 
     /// Total media duration of the publication, in seconds.
     pub duration_seconds: Option<f64>,
