@@ -60,12 +60,20 @@ enum Command {
     Validate {
         /// Path to the `.epub` file to validate.
         epub: PathBuf,
+        /// Emit the structured report as JSON on stdout instead of the
+        /// human-readable summary.
+        #[arg(long)]
+        json: bool,
     },
     /// Run accessibility checks (DAISY ACE) on an existing EPUB 3 publication.
     /// Requires `ace` on PATH (`npm install -g @daisy/ace`).
     A11y {
         /// Path to the `.epub` file to check.
         epub: PathBuf,
+        /// Emit the structured report as JSON on stdout instead of the
+        /// human-readable summary.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -122,8 +130,8 @@ fn main() -> Result<()> {
             no_text_cleanup,
             cover,
         ),
-        Command::Validate { epub } => cmd_validate(&epub),
-        Command::A11y { epub } => cmd_a11y(&epub),
+        Command::Validate { epub, json } => cmd_validate(&epub, json),
+        Command::A11y { epub, json } => cmd_a11y(&epub, json),
     }
 }
 
@@ -216,16 +224,16 @@ fn cmd_convert(
 
     if validate {
         println!();
-        cmd_validate(output)?;
+        cmd_validate(output, false)?;
     }
     if a11y {
         println!();
-        cmd_a11y(output)?;
+        cmd_a11y(output, false)?;
     }
     Ok(())
 }
 
-fn cmd_validate(epub: &std::path::Path) -> Result<()> {
+fn cmd_validate(epub: &std::path::Path, json: bool) -> Result<()> {
     if !dpub_validate::epubcheck_available() {
         anyhow::bail!(
             "epubcheck is not on PATH; install it (e.g. `brew install epubcheck`) and retry"
@@ -238,14 +246,14 @@ fn cmd_validate(epub: &std::path::Path) -> Result<()> {
         ),
         ace: None,
     };
-    print_report(&report);
+    emit_report(&report, json)?;
     if !report.is_clean() {
         anyhow::bail!("validation reported errors");
     }
     Ok(())
 }
 
-fn cmd_a11y(epub: &std::path::Path) -> Result<()> {
+fn cmd_a11y(epub: &std::path::Path, json: bool) -> Result<()> {
     if !dpub_validate::ace_available() {
         anyhow::bail!(
             "ace is not on PATH; install it with `npm install -g @daisy/ace` and retry"
@@ -258,9 +266,22 @@ fn cmd_a11y(epub: &std::path::Path) -> Result<()> {
                 .with_context(|| format!("running ace on {}", epub.display()))?,
         ),
     };
-    print_report(&report);
+    emit_report(&report, json)?;
     if !report.is_clean() {
         anyhow::bail!("accessibility checker reported errors");
+    }
+    Ok(())
+}
+
+/// Either print the human-readable summary, or serialise the report to
+/// stdout as pretty JSON. The JSON shape is the `Report` struct from
+/// `dpub-validate`; field names are stable as part of the 1.0 contract.
+fn emit_report(report: &dpub_validate::Report, json: bool) -> Result<()> {
+    if json {
+        let s = serde_json::to_string_pretty(report).context("serialise report")?;
+        println!("{s}");
+    } else {
+        print_report(report);
     }
     Ok(())
 }

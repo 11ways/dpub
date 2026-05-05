@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- `dpub validate --json` and `dpub a11y --json` emit the structured `Report` as pretty JSON on stdout instead of the human-readable summary. Pairs with the existing non-zero exit code on errors so CI/pipeline consumers can either parse the report or grep on exit status. The schema is the serde-derived form of `dpub_validate::Report`; field names are stable as part of the 1.0 contract.
 - ACE accessibility validation. New subcommand `dpub a11y <epub>` runs the [DAISY ACE checker](https://github.com/daisy/ace) (when `ace` is on PATH — install via `npm install -g @daisy/ace`) and prints a structured report. New `--a11y` flag on `dpub convert` runs the same check immediately after writing the EPUB. EPUBCheck validates spec compliance; ACE validates accessibility (WCAG via axe-core plus EPUB-specific a11y rules). Both matter under the European Accessibility Act. The exit code is non-zero on errors. ACE is opt-in; missing-binary path produces a clear install hint.
 - `dpub convert --cover <path>` embeds a JPEG or PNG cover image into the produced EPUB. The image is referenced from the OPF manifest with the EPUB 3.3 `properties="cover-image"` form so any spec-compliant reader (Apple Books, Thorium, Calibre) shows it as the book's cover. Magic-byte sniffing only — no decode, no resize. Anything that isn't a JPEG or PNG is rejected loudly.
 
