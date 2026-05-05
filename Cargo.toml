@@ -5,6 +5,7 @@ members = [
     "crates/dpub-core",
     "crates/dpub-cli",
     "crates/dpub-convert",
+    "crates/dpub-meta",
     "crates/dpub-util",
     "crates/dpub-validate",
     "crates/dpub-whisper",

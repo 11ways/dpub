@@ -53,8 +53,14 @@ enum Command {
         #[arg(long)]
         no_text_cleanup: bool,
         /// Path to a JPEG or PNG image to embed as the EPUB cover.
-        #[arg(long, value_name = "PATH")]
+        #[arg(long, value_name = "PATH", conflicts_with = "auto_cover")]
         cover: Option<PathBuf>,
+        /// Best-effort cover lookup via Open Library using the book's
+        /// title, author, and identifier. Opt-in: it sends those bits
+        /// of metadata to a third party (Open Library). A miss is
+        /// silent — the book ships without a cover.
+        #[arg(long)]
+        auto_cover: bool,
     },
     /// Validate an existing EPUB 3 publication with EPUBCheck.
     Validate {
@@ -140,6 +146,7 @@ fn main() -> Result<()> {
             whisper_model,
             no_text_cleanup,
             cover,
+            auto_cover,
         } => cmd_convert(
             &ncc,
             &output,
@@ -151,6 +158,7 @@ fn main() -> Result<()> {
             whisper_model,
             no_text_cleanup,
             cover,
+            auto_cover,
         ),
         Command::Validate { epub, json } => cmd_validate(&epub, json),
         Command::A11y { epub, json } => cmd_a11y(&epub, json),
@@ -164,7 +172,7 @@ fn main() -> Result<()> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn cmd_convert(
     ncc: &std::path::Path,
     output: &std::path::Path,
@@ -176,6 +184,7 @@ fn cmd_convert(
     whisper_model: Option<PathBuf>,
     no_text_cleanup: bool,
     cover: Option<PathBuf>,
+    auto_cover: bool,
 ) -> Result<()> {
     let ncc = resolve_ncc_path(ncc)?;
     let book = Book::from_ncc(&ncc).with_context(|| format!("loading {}", ncc.display()))?;
@@ -227,6 +236,8 @@ fn cmd_convert(
             anyhow::bail!("cover image not found at {}", path.display());
         }
         println!("  Cover: {}", path.display());
+    } else if auto_cover {
+        println!("  Cover: best-effort lookup via Open Library");
     }
 
     let opts = dpub_convert::ConvertOptions {
@@ -234,6 +245,7 @@ fn cmd_convert(
         transcribe: transcribe_opts,
         raw_transcript_segments: no_text_cleanup,
         cover,
+        auto_cover,
     };
     let start = std::time::Instant::now();
     dpub_convert::convert_to_file(&book, output, &opts)
@@ -522,6 +534,7 @@ fn cmd_batch(
         transcribe: None,
         raw_transcript_segments: false,
         cover: None,
+        auto_cover: false,
     };
     let start = std::time::Instant::now();
     let entries: Vec<BatchEntry> = books

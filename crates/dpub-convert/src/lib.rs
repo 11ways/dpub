@@ -552,6 +552,11 @@ pub struct ConvertOptions {
     /// Optional path to a JPEG or PNG cover image. Embedded as a
     /// manifest item with `properties="cover-image"`.
     pub cover: Option<std::path::PathBuf>,
+    /// When `true`, attempt a best-effort cover lookup against
+    /// Open Library using the book's title/author/identifier. A
+    /// miss is silent (no cover embedded); a network failure is
+    /// silent. Mutually exclusive with `cover` at the CLI layer.
+    pub auto_cover: bool,
 }
 
 /// Convert and write a DAISY 2.02 publication to an EPUB 3 file in one call.
@@ -567,6 +572,8 @@ pub fn convert_to_file(book: &Book, output: &Path, opts: &ConvertOptions) -> Res
 
     if let Some(cover_path) = &opts.cover {
         publication.cover = Some(load_cover_image(cover_path)?);
+    } else if opts.auto_cover {
+        publication.cover = auto_lookup_cover(book);
     }
 
     // Transcribe BEFORE audio recompression — we want to feed Whisper the
@@ -625,6 +632,44 @@ fn load_cover_image(path: &Path) -> Result<epub3_writer::CoverImage> {
         media_type: media_type.to_owned(),
         bytes,
     })
+}
+
+/// Best-effort cover lookup against Open Library. Logs a single line
+/// describing the outcome — successful match, miss, or transport
+/// error — and returns `None` for everything except a successful
+/// match. Network errors are deliberately swallowed: `--auto-cover`
+/// is best-effort and a missing cover is normal for older DAISY books.
+fn auto_lookup_cover(book: &Book) -> Option<epub3_writer::CoverImage> {
+    let m = book.metadata();
+    let Some(title) = m.title.as_deref() else {
+        eprintln!("--auto-cover: no title in metadata, skipping");
+        return None;
+    };
+    let hints = dpub_meta::LookupHints {
+        title,
+        creator: m.creator.as_deref(),
+        language: m.language.as_deref(),
+        identifier: m.identifier.as_deref(),
+    };
+    match dpub_meta::lookup_cover(&hints) {
+        Ok(Some(fetched)) => {
+            eprintln!("--auto-cover: matched {}", fetched.provenance);
+            let ext = if fetched.media_type == "image/png" { "png" } else { "jpg" };
+            Some(epub3_writer::CoverImage {
+                href: format!("images/cover.{ext}"),
+                media_type: fetched.media_type,
+                bytes: fetched.bytes,
+            })
+        }
+        Ok(None) => {
+            eprintln!("--auto-cover: no plausible match found, skipping");
+            None
+        }
+        Err(e) => {
+            eprintln!("--auto-cover: lookup failed ({e}), skipping");
+            None
+        }
+    }
 }
 
 /// Returns `(media_type, file_extension)` if `bytes` start with a known
