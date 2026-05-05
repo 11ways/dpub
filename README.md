@@ -59,7 +59,7 @@ SMIL:
 | **M3** | End-to-end: `dpub convert <ncc.html> -o out.epub`. ✅ |
 | **M4** | Built-in validation (EPUBCheck + ACE) — `dpub validate`. ✅ (EPUBCheck only; ACE deferred) |
 | **M5** | Audio recompression (MP3 → Opus) — `dpub convert --audio opus --bitrate <kbps>`. ✅ |
-| **M6** | Whisper transcription for audio-only books — `dpub convert --transcribe <lang> --whisper-model <path>`. ✅ |
+| **M6** | Whisper transcription for audio-only books — `dpub convert --transcribe <lang> --whisper-model <path>`. ✅ (segments are merged into prose-shaped paragraphs by default; pass `--no-text-cleanup` for raw output) |
 | **M7** | WASM build for browser-based conversion. |
 | **M8** | 1.0 release: macOS / Linux / Windows binaries. |
 
