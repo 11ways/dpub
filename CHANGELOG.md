@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- ACE accessibility validation. New subcommand `dpub a11y <epub>` runs the [DAISY ACE checker](https://github.com/daisy/ace) (when `ace` is on PATH — install via `npm install -g @daisy/ace`) and prints a structured report. New `--a11y` flag on `dpub convert` runs the same check immediately after writing the EPUB. EPUBCheck validates spec compliance; ACE validates accessibility (WCAG via axe-core plus EPUB-specific a11y rules). Both matter under the European Accessibility Act. The exit code is non-zero on errors. ACE is opt-in; missing-binary path produces a clear install hint.
 - `dpub convert --cover <path>` embeds a JPEG or PNG cover image into the produced EPUB. The image is referenced from the OPF manifest with the EPUB 3.3 `properties="cover-image"` form so any spec-compliant reader (Apple Books, Thorium, Calibre) shows it as the book's cover. Magic-byte sniffing only — no decode, no resize. Anything that isn't a JPEG or PNG is rejected loudly.
 
 ### Changed

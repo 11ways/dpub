@@ -5,13 +5,16 @@ pub enum Error {
     #[error("epubcheck binary not found on PATH")]
     EpubcheckMissing,
 
-    #[error("failed to spawn epubcheck: {0}")]
+    #[error("ace binary not found on PATH (install: `npm install -g @daisy/ace`)")]
+    AceMissing,
+
+    #[error("failed to spawn validator: {0}")]
     Spawn(#[source] std::io::Error),
 
-    #[error("epubcheck exited unexpectedly while validating {path}: {message}")]
+    #[error("validator exited unexpectedly while checking {path}: {message}")]
     Exited { path: PathBuf, message: String },
 
-    #[error("could not parse epubcheck JSON output: {0}")]
+    #[error("could not parse validator JSON output: {0}")]
     Parse(#[from] serde_json::Error),
 
     #[error("I/O error: {0}")]

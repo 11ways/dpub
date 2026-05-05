@@ -4,15 +4,16 @@ use serde::Serialize;
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Report {
     pub epubcheck: Option<BackendReport>,
+    pub ace: Option<BackendReport>,
 }
 
 impl Report {
     /// `true` if no backend produced an error (or fatal). Warnings and infos
     /// are allowed.
     pub fn is_clean(&self) -> bool {
-        self.epubcheck
-            .as_ref()
-            .is_none_or(|r| r.summary.errors == 0 && r.summary.fatals == 0)
+        let backend_clean = |r: &BackendReport| r.summary.errors == 0 && r.summary.fatals == 0;
+        self.epubcheck.as_ref().is_none_or(backend_clean)
+            && self.ace.as_ref().is_none_or(backend_clean)
     }
 }
 
