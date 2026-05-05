@@ -85,3 +85,43 @@ fn epubcheck_clean_on_real_book() {
     // Warnings are allowed for now (real DAISY books can have edge cases that
     // surface as warnings, e.g. duration drift); errors are the hard line.
 }
+
+#[test]
+fn opus_recompression_shrinks_real_book() {
+    let Some(ncc) = book_path() else {
+        eprintln!("DPUB_TEST_BOOK not set — skipping");
+        return;
+    };
+    if !dpub_audio::ffmpeg_available() {
+        eprintln!("ffmpeg not on PATH — skipping");
+        return;
+    }
+    if std::env::var_os("DPUB_TEST_OPUS").is_none() {
+        // Re-encoding 11 h of audio takes minutes; only run when explicitly
+        // opted in. Set DPUB_TEST_OPUS=1 alongside DPUB_TEST_BOOK to trigger.
+        eprintln!("DPUB_TEST_OPUS not set — skipping (opus full-book pass is slow)");
+        return;
+    }
+
+    let book = Book::from_ncc(&ncc).expect("loading book");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let original = dir.path().join("original.epub");
+    let opus = dir.path().join("opus.epub");
+
+    dpub_convert::convert_to_file(&book, &original).expect("write original");
+    dpub_convert::convert_to_file_with_options(
+        &book,
+        &opus,
+        dpub_convert::ConvertOptions {
+            audio: dpub_convert::AudioFormat::Opus { bitrate_kbps: 32 },
+        },
+    )
+    .expect("write opus");
+
+    let original_bytes = std::fs::metadata(&original).expect("stat original").len();
+    let opus_bytes = std::fs::metadata(&opus).expect("stat opus").len();
+    assert!(
+        opus_bytes * 2 < original_bytes,
+        "opus output ({opus_bytes}) should be at least 2x smaller than the original ({original_bytes})",
+    );
+}

@@ -8,6 +8,9 @@ pub enum Error {
     #[error("EPUB writer error: {0}")]
     Epub(#[from] epub3_writer::Error),
 
+    #[error("audio re-encoding failed: {0}")]
+    Audio(#[from] dpub_audio::Error),
+
     #[error("I/O error on {path}: {source}")]
     Io {
         path: PathBuf,

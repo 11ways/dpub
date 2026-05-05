@@ -226,11 +226,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dpub-audio"
+version = "0.1.0-dev"
+dependencies = [
+ "tempfile",
+ "thiserror 1.0.69",
+ "which",
+]
+
+[[package]]
 name = "dpub-cli"
 version = "0.1.0-dev"
 dependencies = [
  "anyhow",
  "clap",
+ "dpub-audio",
  "dpub-convert",
  "dpub-core",
  "dpub-validate",
@@ -243,6 +253,7 @@ name = "dpub-convert"
 version = "0.1.0-dev"
 dependencies = [
  "chrono",
+ "dpub-audio",
  "dpub-core",
  "epub3-writer",
  "tempfile",
