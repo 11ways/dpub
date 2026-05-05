@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- `dpub-cli` and `dpub-convert` now expose `metal` and `cuda` Cargo features that forward to `dpub-whisper`. Build with `cargo build --release -p dpub-cli --features metal` on Apple Silicon to GPU-accelerate `--transcribe` runs (5–10× faster against medium / large-v3 models). Off by default so CI and no-GPU builds stay working.
 - `dpub info` and `dpub convert` now accept either an `ncc.html` file or the directory containing it. Spec-mandated `ncc.html` is tried first; legacy uppercase variants (`NCC.HTML`) resolve via a case-insensitive directory scan. Missing-NCC directories produce a clear error instead of `EISDIR`.
 - In-tree synthetic DAISY 2.02 fixture at `crates/dpub-convert/tests/fixtures/minimal_daisy/` (~10 KB total: NCC, master.smil, one section SMIL, one tiny MP3). Three integration tests exercise the full parse → convert → ZIP pipeline against it on every `cargo test` run, including CI. The optional EPUBCheck assertion fires when `epubcheck` is on PATH.
 - Initial Cargo workspace with `dpub-core` and `dpub-cli` crates.
