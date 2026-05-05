@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- `dpub info` and `dpub convert` now accept either an `ncc.html` file or the directory containing it. Spec-mandated `ncc.html` is tried first; legacy uppercase variants (`NCC.HTML`) resolve via a case-insensitive directory scan. Missing-NCC directories produce a clear error instead of `EISDIR`.
 - In-tree synthetic DAISY 2.02 fixture at `crates/dpub-convert/tests/fixtures/minimal_daisy/` (~10 KB total: NCC, master.smil, one section SMIL, one tiny MP3). Three integration tests exercise the full parse → convert → ZIP pipeline against it on every `cargo test` run, including CI. The optional EPUBCheck assertion fires when `epubcheck` is on PATH.
 - Initial Cargo workspace with `dpub-core` and `dpub-cli` crates.
 - `dpub info <ncc.html>` reads metadata and navigation summary from a DAISY 2.02 publication (M0.5).

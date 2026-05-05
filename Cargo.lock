@@ -330,6 +330,7 @@ dependencies = [
  "dpub-convert",
  "dpub-core",
  "dpub-validate",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

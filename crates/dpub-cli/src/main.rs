@@ -15,12 +15,12 @@ struct Cli {
 enum Command {
     /// Print metadata and structure of a DAISY 2.02 publication.
     Info {
-        /// Path to the publication's `ncc.html`.
+        /// Path to the publication's `ncc.html`, or the directory containing it.
         ncc: PathBuf,
     },
     /// Convert a DAISY 2.02 publication to an EPUB 3 file.
     Convert {
-        /// Path to the publication's `ncc.html`.
+        /// Path to the publication's `ncc.html`, or the directory containing it.
         ncc: PathBuf,
         /// Output path for the resulting `.epub` file.
         #[arg(short, long)]
@@ -111,7 +111,8 @@ fn cmd_convert(
     transcribe: Option<String>,
     whisper_model: Option<PathBuf>,
 ) -> Result<()> {
-    let book = Book::from_ncc(ncc).with_context(|| format!("loading {}", ncc.display()))?;
+    let ncc = resolve_ncc_path(ncc)?;
+    let book = Book::from_ncc(&ncc).with_context(|| format!("loading {}", ncc.display()))?;
     println!("Converting {} → {}", ncc.display(), output.display());
     println!(
         "  {} sections, {} sync points, {} audio clips, total {}",
@@ -225,8 +226,9 @@ fn print_report(report: &dpub_validate::Report) {
 }
 
 fn cmd_info(ncc_path: &std::path::Path) -> Result<()> {
+    let ncc_path = resolve_ncc_path(ncc_path)?;
     let book =
-        Book::from_ncc(ncc_path).with_context(|| format!("loading {}", ncc_path.display()))?;
+        Book::from_ncc(&ncc_path).with_context(|| format!("loading {}", ncc_path.display()))?;
     let m = book.metadata();
 
     println!("Title:         {}", m.title.as_deref().unwrap_or("—"));
@@ -302,4 +304,97 @@ fn format_levels(by_level: &std::collections::BTreeMap<u8, usize>) -> String {
         .map(|(level, count)| format!("h{level}: {count}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Accept either an `ncc.html` file directly, or a directory containing one.
+/// Tries the spec-mandated lowercase name first; falls back to a
+/// case-insensitive scan so legacy books with `NCC.HTML` still resolve.
+fn resolve_ncc_path(input: &std::path::Path) -> Result<PathBuf> {
+    let meta = std::fs::metadata(input)
+        .with_context(|| format!("reading {}", input.display()))?;
+    if meta.is_file() {
+        return Ok(input.to_path_buf());
+    }
+    if !meta.is_dir() {
+        anyhow::bail!("{} is neither a file nor a directory", input.display());
+    }
+    let direct = input.join("ncc.html");
+    if direct.is_file() {
+        return Ok(direct);
+    }
+    for entry in std::fs::read_dir(input)
+        .with_context(|| format!("reading directory {}", input.display()))?
+    {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("ncc.html")
+            && entry.file_type().is_ok_and(|t| t.is_file())
+        {
+            return Ok(entry.path());
+        }
+    }
+    anyhow::bail!(
+        "no `ncc.html` found in directory {} — is this a DAISY 2.02 publication?",
+        input.display()
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_ncc_path;
+    use std::fs;
+
+    #[test]
+    fn resolves_a_file_path_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ncc.html");
+        fs::write(&path, "<html></html>").unwrap();
+        assert_eq!(resolve_ncc_path(&path).unwrap(), path);
+    }
+
+    #[test]
+    fn resolves_directory_to_ncc_html() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ncc.html");
+        fs::write(&path, "<html></html>").unwrap();
+        assert_eq!(resolve_ncc_path(dir.path()).unwrap(), path);
+    }
+
+    #[test]
+    fn resolves_directory_with_uppercase_ncc() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("NCC.HTML");
+        fs::write(&path, "<html></html>").unwrap();
+        let resolved = resolve_ncc_path(dir.path()).unwrap();
+        // On case-insensitive filesystems (macOS default) the `ncc.html` probe
+        // succeeds and returns that exact form; on case-sensitive filesystems
+        // (Linux CI) the directory scan returns the literal `NCC.HTML`. Either
+        // is correct as long as it points at a real file in the dir.
+        assert!(resolved.is_file());
+        assert_eq!(resolved.parent(), Some(dir.path()));
+        assert!(
+            resolved
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("ncc.html")
+        );
+    }
+
+    #[test]
+    fn errors_on_directory_without_ncc() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("master.smil"), "").unwrap();
+        let err = resolve_ncc_path(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("no `ncc.html`"));
+    }
+
+    #[test]
+    fn errors_on_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        assert!(resolve_ncc_path(&missing).is_err());
+    }
 }
