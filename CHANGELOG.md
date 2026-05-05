@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- `dpub convert --cover <path>` embeds a JPEG or PNG cover image into the produced EPUB. The image is referenced from the OPF manifest with the EPUB 3.3 `properties="cover-image"` form so any spec-compliant reader (Apple Books, Thorium, Calibre) shows it as the book's cover. Magic-byte sniffing only — no decode, no resize. Anything that isn't a JPEG or PNG is rejected loudly.
+
 ### Changed
 
 - `dpub-whisper` exposes a new `Transcriber` struct that owns the loaded GGML model and offers a `transcribe(&self, audio_path)` method. `dpub-convert::inject_transcripts` now constructs one `Transcriber` per book and reuses it across every audio file, instead of re-loading the model per call. Closes #10. Saves ~3–5 minutes wallclock on a 30-section book and avoids per-file Metal/CUDA buffer churn. The free `dpub_whisper::transcribe(audio, opts)` function is preserved as a one-shot convenience for the smoke test.

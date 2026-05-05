@@ -45,6 +45,7 @@ pub fn convert(book: &Book) -> Result<Publication> {
         nav,
         sections,
         audio_files,
+        cover: None,
     })
 }
 
@@ -548,6 +549,9 @@ pub struct ConvertOptions {
     /// Whisper segment. Default `false` — segments are merged into
     /// prose-shaped paragraphs of ~3–6 sentences each.
     pub raw_transcript_segments: bool,
+    /// Optional path to a JPEG or PNG cover image. Embedded as a
+    /// manifest item with `properties="cover-image"`.
+    pub cover: Option<std::path::PathBuf>,
 }
 
 /// Convert and write a DAISY 2.02 publication to an EPUB 3 file in one call.
@@ -560,6 +564,10 @@ pub struct ConvertOptions {
 /// XHTMLs with the transcribed text.
 pub fn convert_to_file(book: &Book, output: &Path, opts: &ConvertOptions) -> Result<()> {
     let mut publication = convert(book)?;
+
+    if let Some(cover_path) = &opts.cover {
+        publication.cover = Some(load_cover_image(cover_path)?);
+    }
 
     // Transcribe BEFORE audio recompression — we want to feed Whisper the
     // original (typically MP3) bytes, not a lossy Opus pass that throws away
@@ -596,6 +604,40 @@ pub fn convert_to_file(book: &Book, output: &Path, opts: &ConvertOptions) -> Res
     })?;
     publication.write_zip(&mut f)?;
     Ok(())
+}
+
+/// Read a JPEG or PNG file from disk and wrap it in a [`CoverImage`]
+/// ready to embed in the manifest. Magic-byte sniffing only — no
+/// decode, no resize. Anything else is rejected with
+/// [`Error::UnsupportedCoverImage`].
+fn load_cover_image(path: &Path) -> Result<epub3_writer::CoverImage> {
+    let bytes = std::fs::read(path).map_err(|source| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let (media_type, ext) = sniff_image_format(&bytes).ok_or_else(|| {
+        Error::UnsupportedCoverImage {
+            path: path.to_path_buf(),
+        }
+    })?;
+    Ok(epub3_writer::CoverImage {
+        href: format!("images/cover.{ext}"),
+        media_type: media_type.to_owned(),
+        bytes,
+    })
+}
+
+/// Returns `(media_type, file_extension)` if `bytes` start with a known
+/// JPEG or PNG magic sequence. JPEG is `FF D8 FF`; PNG is the eight-byte
+/// signature `89 50 4E 47 0D 0A 1A 0A`. Anything else returns `None`.
+fn sniff_image_format(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(("image/jpeg", "jpg"))
+    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some(("image/png", "png"))
+    } else {
+        None
+    }
 }
 
 /// For every section, find the audio files referenced by the section's

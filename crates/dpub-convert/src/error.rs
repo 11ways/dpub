@@ -20,6 +20,9 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("unsupported cover image at {path}: only JPEG and PNG are accepted")]
+    UnsupportedCoverImage { path: PathBuf },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

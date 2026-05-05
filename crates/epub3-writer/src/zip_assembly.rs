@@ -117,6 +117,12 @@ impl Publication {
             stream_into_zip(&mut zip, &audio.source_path, &path)?;
         }
 
+        // 8. EPUB/<cover.href> — Stored (image is already compressed).
+        if let Some(cover) = &publication.cover {
+            let path = format!("EPUB/{}", cover.href);
+            write_entry(&mut zip, &path, &cover.bytes, audio_opts)?;
+        }
+
         zip.finish()?;
         Ok(())
     }

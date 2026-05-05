@@ -73,6 +73,7 @@ fn validates_a_clean_epub_with_zero_errors() {
             source_path: mp3_path,
             media_type: "audio/mpeg".into(),
         }],
+        cover: None,
     };
 
     let epub_path = dir.path().join("clean.epub");

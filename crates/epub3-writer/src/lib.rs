@@ -18,8 +18,8 @@ mod zip_assembly;
 
 pub use error::{Error, Result};
 pub use model::{
-    AccessMode, AudioFile, ContentDocument, MediaOverlay, Nav, NavListItem, OverlayItem,
-    OverlayPar, OverlaySeq, PackageMetadata, Publication, SectionPart,
+    AccessMode, AudioFile, ContentDocument, CoverImage, MediaOverlay, Nav, NavListItem,
+    OverlayItem, OverlayPar, OverlaySeq, PackageMetadata, Publication, SectionPart,
 };
 pub use writers::{
     write_container_xml, write_content_xhtml, write_nav_xhtml, write_overlay_smil,

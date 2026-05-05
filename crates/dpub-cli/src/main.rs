@@ -48,6 +48,9 @@ enum Command {
         /// output; not recommended for distribution.
         #[arg(long)]
         no_text_cleanup: bool,
+        /// Path to a JPEG or PNG image to embed as the EPUB cover.
+        #[arg(long, value_name = "PATH")]
+        cover: Option<PathBuf>,
     },
     /// Validate an existing EPUB 3 publication with EPUBCheck.
     Validate {
@@ -95,6 +98,7 @@ fn main() -> Result<()> {
             transcribe,
             whisper_model,
             no_text_cleanup,
+            cover,
         } => cmd_convert(
             &ncc,
             &output,
@@ -104,6 +108,7 @@ fn main() -> Result<()> {
             transcribe,
             whisper_model,
             no_text_cleanup,
+            cover,
         ),
         Command::Validate { epub } => cmd_validate(&epub),
     }
@@ -119,6 +124,7 @@ fn cmd_convert(
     transcribe: Option<String>,
     whisper_model: Option<PathBuf>,
     no_text_cleanup: bool,
+    cover: Option<PathBuf>,
 ) -> Result<()> {
     let ncc = resolve_ncc_path(ncc)?;
     let book = Book::from_ncc(&ncc).with_context(|| format!("loading {}", ncc.display()))?;
@@ -165,10 +171,18 @@ fn cmd_convert(
         (None, None) => None,
     };
 
+    if let Some(path) = &cover {
+        if !path.is_file() {
+            anyhow::bail!("cover image not found at {}", path.display());
+        }
+        println!("  Cover: {}", path.display());
+    }
+
     let opts = dpub_convert::ConvertOptions {
         audio: audio.into_format(bitrate_kbps),
         transcribe: transcribe_opts,
         raw_transcript_segments: no_text_cleanup,
+        cover,
     };
     let start = std::time::Instant::now();
     dpub_convert::convert_to_file(&book, output, &opts)

@@ -119,6 +119,7 @@ fn opus_recompression_shrinks_real_book() {
             audio: dpub_convert::AudioFormat::Opus { bitrate_kbps: 32 },
             transcribe: None,
             raw_transcript_segments: false,
+            cover: None,
         },
     )
     .expect("write opus");
