@@ -525,20 +525,43 @@ pub enum AudioFormat {
     Opus { bitrate_kbps: u32 },
 }
 
-/// Knobs for [`convert_with_options`] / [`convert_to_file_with_options`].
-#[derive(Debug, Default, Clone, Copy)]
+/// Optional Whisper-driven transcription that fills the text layer of an
+/// audio-only DAISY book. When set, every distinct audio file is decoded
+/// and transcribed; the resulting segments get placed in the content
+/// XHTMLs in time order.
+#[derive(Debug, Clone)]
+pub struct TranscribeOptions {
+    /// Path to a `ggml-*.bin` Whisper model. See the `dpub-whisper` crate
+    /// docs for download links.
+    pub model_path: std::path::PathBuf,
+    /// ISO 639-1 language code, e.g. `"nl"` for Dutch.
+    pub language: String,
+}
+
+/// Knobs for [`convert_to_file`].
+#[derive(Debug, Default, Clone)]
 pub struct ConvertOptions {
     pub audio: AudioFormat,
+    pub transcribe: Option<TranscribeOptions>,
 }
 
 /// Convert and write a DAISY 2.02 publication to an EPUB 3 file in one call.
 ///
 /// Pass `ConvertOptions::default()` (or `Default::default()`) for the common
-/// case of "embed source audio unchanged". Set
-/// `opts.audio = AudioFormat::Opus { bitrate_kbps }` to re-encode every
-/// audio file to Ogg/Opus before writing — this requires `ffmpeg` on PATH.
-pub fn convert_to_file(book: &Book, output: &Path, opts: ConvertOptions) -> Result<()> {
+/// case of "embed source audio unchanged". Set `opts.audio = AudioFormat::Opus
+/// { bitrate_kbps }` to re-encode every audio file to Ogg/Opus before writing
+/// — this requires `ffmpeg` on PATH. Set `opts.transcribe = Some(...)` to
+/// run local Whisper inference per audio file and populate the content
+/// XHTMLs with the transcribed text.
+pub fn convert_to_file(book: &Book, output: &Path, opts: &ConvertOptions) -> Result<()> {
     let mut publication = convert(book)?;
+
+    // Transcribe BEFORE audio recompression — we want to feed Whisper the
+    // original (typically MP3) bytes, not a lossy Opus pass that throws away
+    // information whisper.cpp's frontend re-discards anyway.
+    if let Some(transcribe) = &opts.transcribe {
+        inject_transcripts(book, &mut publication, transcribe)?;
+    }
 
     // Recompression has to happen *before* the ZIP write because the writer
     // streams audio bytes from `source_path` directly into the archive.
@@ -563,6 +586,102 @@ pub fn convert_to_file(book: &Book, output: &Path, opts: ConvertOptions) -> Resu
     })?;
     publication.write_zip(&mut f)?;
     Ok(())
+}
+
+/// For every section, find the audio files referenced by the section's
+/// Media Overlay, transcribe each of them (caching across sections that
+/// share an audio file), and append the time-ordered transcript as a flat
+/// list of `<p>` paragraphs to the section's content XHTML.
+///
+/// The Media Overlay structure is left untouched — sync stays at the
+/// original par-anchor granularity (matching the DAISY navigation), and
+/// the new paragraphs are pure prose for readers who want to read along
+/// with the audio. Per-paragraph audio sync is a future refinement (M6.5).
+fn inject_transcripts(
+    book: &Book,
+    publication: &mut Publication,
+    opts: &TranscribeOptions,
+) -> Result<()> {
+    let whisper_opts = dpub_whisper::TranscribeOptions {
+        model_path: opts.model_path.clone(),
+        language: opts.language.clone(),
+    };
+
+    // Cache: file basename → segments. Reused across sections that share an
+    // audio file.
+    let mut cache: std::collections::HashMap<String, Vec<dpub_whisper::Segment>> =
+        std::collections::HashMap::new();
+
+    for (idx, section_part) in publication.sections.iter_mut().enumerate() {
+        // Collect the (audio basename, [t0, t1]) pairs this section uses,
+        // in document order.
+        let mut audio_ranges: Vec<(String, f64, f64)> = Vec::new();
+        if let Some(section_smil) = book.sections.get(idx) {
+            collect_audio_ranges(&section_smil.root, &mut audio_ranges);
+        }
+
+        // Transcribe the involved audio files (skipping any we already did).
+        for (audio_basename, _, _) in &audio_ranges {
+            if cache.contains_key(audio_basename) {
+                continue;
+            }
+            let audio_full_path = book.root.join(audio_basename);
+            let segments = dpub_whisper::transcribe(&audio_full_path, &whisper_opts)?;
+            cache.insert(audio_basename.clone(), segments);
+        }
+
+        // Append paragraphs of transcribed text to this section's body in
+        // time-order. `audio_ranges` is already in document order, so we
+        // walk it and pick up segments whose mid-point falls inside each
+        // [t0, t1] range.
+        let mut new_paragraphs = String::new();
+        for (audio_basename, t0, t1) in &audio_ranges {
+            let Some(segments) = cache.get(audio_basename) else {
+                continue;
+            };
+            for seg in segments {
+                let mid = (seg.start_seconds + seg.end_seconds) * 0.5;
+                if mid >= *t0 && mid <= *t1 && !seg.text.is_empty() {
+                    let _ = std::fmt::Write::write_fmt(
+                        &mut new_paragraphs,
+                        format_args!("  <p>{}</p>\n", escape_text(&seg.text)),
+                    );
+                }
+            }
+        }
+        if !new_paragraphs.is_empty() {
+            section_part.content.body_xhtml.push_str(&new_paragraphs);
+        }
+    }
+
+    Ok(())
+}
+
+/// Walk a SectionSmil's `<seq>` tree collecting (audio basename, t0, t1)
+/// triples for every `<par>` that has an associated audio span. The
+/// audio basename is just the last path segment of the SMIL `audio src`
+/// — that matches what `build_audio_files` puts into the EPUB.
+fn collect_audio_ranges(seq: &SmilSeq, out: &mut Vec<(String, f64, f64)>) {
+    for child in &seq.children {
+        match child {
+            SeqChild::Par(par) => {
+                if let Some((src, t0, t1)) = par_audio_range(par) {
+                    out.push((src, t0, t1));
+                }
+            }
+            SeqChild::Seq(inner) => collect_audio_ranges(inner, out),
+            SeqChild::Audio(_) => {
+                // Bare audio at the seq root has no text-anchor companion,
+                // so it doesn't get its own par; counted as part of an
+                // enclosing par via collapse_par's logic.
+            }
+        }
+    }
+}
+
+fn par_audio_range(par: &dpub_core::SmilPar) -> Option<(String, f64, f64)> {
+    let (src, t0, t1) = collect_audio(par)?;
+    Some((file_basename(&src), t0, t1))
 }
 
 /// Re-encode every audio file in the publication to Ogg/Opus, mutating the

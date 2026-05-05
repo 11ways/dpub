@@ -11,6 +11,9 @@ pub enum Error {
     #[error("audio re-encoding failed: {0}")]
     Audio(#[from] dpub_audio::Error),
 
+    #[error("transcription failed: {0}")]
+    Whisper(#[from] dpub_whisper::Error),
+
     #[error("I/O error on {path}: {source}")]
     Io {
         path: PathBuf,

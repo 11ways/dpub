@@ -34,6 +34,15 @@ enum Command {
         /// Bitrate (kbit/s) when --audio=opus. Sensible range: 32–96 for speech.
         #[arg(long, default_value_t = dpub_audio::DEFAULT_OPUS_BITRATE_KBPS)]
         bitrate: u32,
+        /// Transcribe audio with local Whisper (e.g. `nl`, `en`). Requires
+        /// `--whisper-model`. The text gets injected into each section's
+        /// content document as a flat list of paragraphs.
+        #[arg(long)]
+        transcribe: Option<String>,
+        /// Path to a `ggml-*.bin` Whisper model file. Required with
+        /// `--transcribe`.
+        #[arg(long)]
+        whisper_model: Option<PathBuf>,
     },
     /// Validate an existing EPUB 3 publication with EPUBCheck.
     Validate {
@@ -78,7 +87,17 @@ fn main() -> Result<()> {
             validate,
             audio,
             bitrate,
-        } => cmd_convert(&ncc, &output, validate, audio, bitrate),
+            transcribe,
+            whisper_model,
+        } => cmd_convert(
+            &ncc,
+            &output,
+            validate,
+            audio,
+            bitrate,
+            transcribe,
+            whisper_model,
+        ),
         Command::Validate { epub } => cmd_validate(&epub),
     }
 }
@@ -89,6 +108,8 @@ fn cmd_convert(
     validate: bool,
     audio: AudioOpt,
     bitrate_kbps: u32,
+    transcribe: Option<String>,
+    whisper_model: Option<PathBuf>,
 ) -> Result<()> {
     let book = Book::from_ncc(ncc).with_context(|| format!("loading {}", ncc.display()))?;
     println!("Converting {} → {}", ncc.display(), output.display());
@@ -108,11 +129,38 @@ fn cmd_convert(
         println!("  Audio: Opus @ {bitrate_kbps} kbit/s (re-encoding)");
     }
 
+    let transcribe_opts = match (transcribe, whisper_model) {
+        (Some(language), Some(model_path)) => {
+            if !model_path.is_file() {
+                anyhow::bail!(
+                    "Whisper model not found at {} (download from https://huggingface.co/ggerganov/whisper.cpp)",
+                    model_path.display()
+                );
+            }
+            println!(
+                "  Transcribe: lang={language} model={}",
+                model_path.display()
+            );
+            Some(dpub_convert::TranscribeOptions {
+                model_path,
+                language,
+            })
+        }
+        (Some(_), None) => {
+            anyhow::bail!("--transcribe requires --whisper-model");
+        }
+        (None, Some(_)) => {
+            anyhow::bail!("--whisper-model requires --transcribe");
+        }
+        (None, None) => None,
+    };
+
     let opts = dpub_convert::ConvertOptions {
         audio: audio.into_format(bitrate_kbps),
+        transcribe: transcribe_opts,
     };
     let start = std::time::Instant::now();
-    dpub_convert::convert_to_file(&book, output, opts)
+    dpub_convert::convert_to_file(&book, output, &opts)
         .with_context(|| format!("writing {}", output.display()))?;
     let elapsed = start.elapsed();
     let bytes = std::fs::metadata(output).map_or(0, |m| m.len());

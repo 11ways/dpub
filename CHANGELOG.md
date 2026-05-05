@@ -24,6 +24,10 @@ All notable changes to this project will be documented in this file. The format 
 - New `dpub-validate` crate and `dpub validate <epub>` subcommand (M4): subprocess-wraps the official EPUBCheck JVM tool when present on `PATH`, parses its `--json -` output, and prints a structured summary plus per-issue list. The `dpub convert` command grows a `--validate` flag that runs validation right after writing. Exit code is non-zero when any error or fatal is reported.
 - New `dpub-audio` crate and `dpub convert --audio opus --bitrate <kbps>` flags (M5): subprocess-wraps the system `ffmpeg` to re-encode every audio file to Ogg/Opus before EPUB assembly, with all Media Overlay clip times preserved unchanged (Opus stays in-seconds, just like MP3). On the reference 11 h 45 m audiobook, `--audio opus --bitrate 32` produces a **2.5× smaller** EPUB (159.9 MiB vs 403.6 MiB) that still validates EPUBCheck-clean. Defaults: 64 kbit/s, mono, 16 kHz, `voip` application — speech-tuned.
 
+### Added (continued)
+
+- New `dpub-whisper` crate and `dpub convert --transcribe <lang> --whisper-model <path>` flags (M6): runs local Whisper transcription via `whisper-rs` (FFI to whisper.cpp) on every audio file in the publication, then injects the time-ordered text as `<p>` paragraphs into each section's content XHTML. Audio decoding is pure-Rust (`symphonia` + `rubato` resampling to 16 kHz mono); no extra ffmpeg dependency for the transcription path. Models are GGML-format `ggml-*.bin` files downloaded separately from <https://huggingface.co/ggerganov/whisper.cpp>. Optional Cargo features `metal` / `cuda` enable GPU acceleration. Smoke-tested end-to-end against a synthetic MP3 with the `tiny` model.
+
 ### Changed (M5.5 consolidation)
 
 - New `dpub-util` crate with `xml::escape_text` / `xml::escape_attr` returning `Cow<'_, str>` (zero allocation when no escapes are needed). Replaces three independent in-tree implementations.
