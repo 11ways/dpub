@@ -85,6 +85,7 @@ fn build_package_metadata(book: &Book) -> PackageMetadata {
             .as_deref()
             .map(|raw| format!("urn:dpub:daisy:{raw}")),
         description: None,
+        rights: m.other.get("dc:rights").cloned(),
         duration_seconds: Some(book.total_audio_seconds()),
         narrator: m.narrator.clone(),
         access_modes: if m.multimedia_type.as_deref() == Some("audioFullText") {
@@ -557,6 +558,12 @@ pub struct ConvertOptions {
     /// miss is silent (no cover embedded); a network failure is
     /// silent. Mutually exclusive with `cover` at the CLI layer.
     pub auto_cover: bool,
+    /// Free-text rights statement to stamp into the EPUB's
+    /// `<dc:rights>` field. When `None`, the source DAISY's
+    /// `dc:rights` (if any) carries through; the CLI override
+    /// is the simplest way to assert rights when the source
+    /// doesn't carry one.
+    pub rights: Option<String>,
 }
 
 /// Convert and write a DAISY 2.02 publication to an EPUB 3 file in one call.
@@ -574,6 +581,10 @@ pub fn convert_to_file(book: &Book, output: &Path, opts: &ConvertOptions) -> Res
         publication.cover = Some(load_cover_image(cover_path)?);
     } else if opts.auto_cover {
         publication.cover = auto_lookup_cover(book);
+    }
+
+    if let Some(rights) = &opts.rights {
+        publication.metadata.rights = Some(rights.clone());
     }
 
     // Transcribe BEFORE audio recompression — we want to feed Whisper the

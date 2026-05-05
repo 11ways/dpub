@@ -61,6 +61,11 @@ enum Command {
         /// silent — the book ships without a cover.
         #[arg(long)]
         auto_cover: bool,
+        /// Free-text rights statement to stamp into the EPUB's
+        /// `<dc:rights>` field. Overrides any rights string in the
+        /// source DAISY metadata.
+        #[arg(long, value_name = "TEXT")]
+        rights: Option<String>,
     },
     /// Validate an existing EPUB 3 publication with EPUBCheck.
     Validate {
@@ -147,6 +152,7 @@ fn main() -> Result<()> {
             no_text_cleanup,
             cover,
             auto_cover,
+            rights,
         } => cmd_convert(
             &ncc,
             &output,
@@ -159,6 +165,7 @@ fn main() -> Result<()> {
             no_text_cleanup,
             cover,
             auto_cover,
+            rights,
         ),
         Command::Validate { epub, json } => cmd_validate(&epub, json),
         Command::A11y { epub, json } => cmd_a11y(&epub, json),
@@ -185,6 +192,7 @@ fn cmd_convert(
     no_text_cleanup: bool,
     cover: Option<PathBuf>,
     auto_cover: bool,
+    rights: Option<String>,
 ) -> Result<()> {
     let ncc = resolve_ncc_path(ncc)?;
     let book = Book::from_ncc(&ncc).with_context(|| format!("loading {}", ncc.display()))?;
@@ -246,6 +254,7 @@ fn cmd_convert(
         raw_transcript_segments: no_text_cleanup,
         cover,
         auto_cover,
+        rights,
     };
     let start = std::time::Instant::now();
     dpub_convert::convert_to_file(&book, output, &opts)
@@ -535,6 +544,7 @@ fn cmd_batch(
         raw_transcript_segments: false,
         cover: None,
         auto_cover: false,
+        rights: None,
     };
     let start = std::time::Instant::now();
     let entries: Vec<BatchEntry> = books

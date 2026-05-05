@@ -121,6 +121,7 @@ fn opus_recompression_shrinks_real_book() {
             raw_transcript_segments: false,
             cover: None,
             auto_cover: false,
+            rights: None,
         },
     )
     .expect("write opus");

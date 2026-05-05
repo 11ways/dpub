@@ -91,6 +91,9 @@ fn write_opf_metadata(s: &mut String, pub_: &Publication) {
             escape_text(desc)
         );
     }
+    if let Some(rights) = &m.rights {
+        let _ = write!(s, "    <dc:rights>{}</dc:rights>\n", escape_text(rights));
+    }
 
     if let Some(n) = &m.narrator {
         let _ = write!(
