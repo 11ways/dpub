@@ -148,6 +148,7 @@ external assets or are slow:
 | `DPUB_TEST_WHISPER_MODEL=/path/ggml-*.bin` and `DPUB_TEST_AUDIO=/path/audio.mp3` | Enable the Whisper smoke test in `dpub-whisper`. Optional `DPUB_TEST_WHISPER_LANG=nl`. |
 | `epubcheck` on `PATH` | The `dpub-validate` and `epub3-writer` integration tests will run EPUBCheck and assert zero errors. They skip silently if the binary is missing. |
 | `ace` on `PATH` | (No CI-gated test yet.) Enables `dpub a11y` end-to-end. Install with `npm install -g @daisy/ace`. |
+| `DPUB_TEST_OPENLIBRARY=1` | Enables the live Open Library cover-lookup smoke test in `dpub-meta`. Skipped on CI to avoid flakiness on third-party-service availability. |
 | `ffmpeg` on `PATH` | The `dpub-audio` and Opus re-encoding tests run; they skip silently otherwise. |
 | `cmake` on `PATH` | Required to build `dpub-whisper` (and therefore `dpub-cli` once it depends on it). The `whisper-rs-sys` crate compiles whisper.cpp from source. |
 
