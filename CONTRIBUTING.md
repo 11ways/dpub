@@ -11,7 +11,7 @@ Thanks for your interest! dpub is in early development. Bug reports, design feed
 
 ## Development setup
 
-You need a recent stable Rust toolchain (1.85+, Edition 2024).
+You need a recent stable Rust toolchain (MSRV 1.88, Edition 2024) and `cmake` for the bundled `dpub-whisper` crate (the `whisper-rs-sys` dep compiles whisper.cpp from source).
 
 ```sh
 git clone https://github.com/11ways/dpub
@@ -19,6 +19,8 @@ cd dpub
 cargo build
 cargo test
 ```
+
+Several optional dev tools turn on additional integration tests; see the table in [`README.md`](README.md#local-development).
 
 Optional but recommended for local validation parity with CI:
 
@@ -30,9 +32,16 @@ cargo clippy --all-targets -- -D warnings
 ## Project structure
 
 - `crates/dpub-core/` — DAISY 2.02 in-memory model and parser. No I/O beyond reading input files.
-- `crates/dpub-cli/` — the `dpub` binary. User-facing concerns only; logic lives in core / domain crates.
+- `crates/epub3-writer/` — typed EPUB 3 model and ZIP serialiser (Media Overlays, cover image).
+- `crates/dpub-convert/` — drives the DAISY 2.02 → EPUB 3 pipeline.
+- `crates/dpub-validate/` — EPUBCheck and ACE wrappers, structured `Report`.
+- `crates/dpub-audio/` — ffmpeg-driven MP3 → Opus re-encoder.
+- `crates/dpub-whisper/` — local Whisper transcription via whisper.cpp FFI.
+- `crates/dpub-meta/` — external metadata lookup (currently Open Library covers).
+- `crates/dpub-util/` — small shared helpers (XML escaping).
+- `crates/dpub-cli/` — the `dpub` binary. User-facing concerns only; logic lives in the domain crates.
 
-Future crates (`epub3-writer`, `dpub-validate`, `dpub-audio`, `dpub-whisper`, `dpub-wasm`) are introduced milestone by milestone.
+`dpub-wasm` is the next planned crate (M7).
 
 ## Testing
 
@@ -58,6 +67,19 @@ short imperative subject (≤72 chars)
 Optional body explaining the *why* if it isn't obvious from the diff.
 Reference issues with `Refs #N` or `Closes #N`.
 ```
+
+## Releasing
+
+Releases are cut by tag. The [`.github/workflows/release.yml`](.github/workflows/release.yml) workflow fires on any `v*` tag push and builds the `dpub` binary for Linux (x86_64), macOS (arm64, with Metal Whisper acceleration), and Windows (x86_64); it then uploads each as an asset on a GitHub Release of the same name.
+
+To cut a release:
+
+1. Bump `version` in the workspace `Cargo.toml` (e.g. `0.1.0-dev` → `0.5.0`).
+2. Update `CHANGELOG.md`: rename the `[Unreleased]` section to the new version with today's date, and add a fresh empty `[Unreleased]` block above it.
+3. Commit on `main` (via PR) and tag: `git tag v0.5.0 && git push origin v0.5.0`.
+4. Wait for the workflow to finish; verify the artifacts attached to the release page work on each platform.
+
+Binaries from this workflow are **not signed**. macOS code signing + notarisation requires Apple Developer credentials in repo secrets, which is deferred until the project commits to that maintenance burden.
 
 ## Licensing of contributions
 
