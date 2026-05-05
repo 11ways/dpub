@@ -47,6 +47,8 @@ SMIL:
   Audio files: 30
 ```
 
+> **Tip — opening the converted EPUB.** Most generic readers (including Apple Books) display EPUB 3 but won't play [Media Overlays](https://www.w3.org/TR/epub-33/#sec-media-overlays), so an audio DAISY converted by `dpub` will look like a silent shell. Use [Thorium Reader](https://www.edrlab.org/software/thorium-reader/) (free, open-source, EDRLab) — the reference Media Overlays implementation — to get synced text-and-audio playback. On macOS: `brew install --cask thorium`.
+
 ## Roadmap
 
 | Milestone | Scope |
