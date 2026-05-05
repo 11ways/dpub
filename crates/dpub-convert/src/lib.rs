@@ -620,6 +620,10 @@ fn inject_transcripts(
         model_path: opts.model_path.clone(),
         language: opts.language.clone(),
     };
+    // Load the GGML model exactly once for the whole book. Calling
+    // `dpub_whisper::transcribe` per file would re-load 1.5 GB+ of
+    // weights into Metal/CUDA buffers for every audio file (#10).
+    let transcriber = dpub_whisper::Transcriber::new(&whisper_opts)?;
 
     // Cache: file basename → segments. Reused across sections that share an
     // audio file.
@@ -640,7 +644,7 @@ fn inject_transcripts(
                 continue;
             }
             let audio_full_path = book.root.join(audio_basename);
-            let segments = dpub_whisper::transcribe(&audio_full_path, &whisper_opts)?;
+            let segments = transcriber.transcribe(&audio_full_path)?;
             cache.insert(audio_basename.clone(), segments);
         }
 

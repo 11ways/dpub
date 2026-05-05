@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- `dpub-whisper` exposes a new `Transcriber` struct that owns the loaded GGML model and offers a `transcribe(&self, audio_path)` method. `dpub-convert::inject_transcripts` now constructs one `Transcriber` per book and reuses it across every audio file, instead of re-loading the model per call. Closes #10. Saves ~3–5 minutes wallclock on a 30-section book and avoids per-file Metal/CUDA buffer churn. The free `dpub_whisper::transcribe(audio, opts)` function is preserved as a one-shot convenience for the smoke test.
+
 ### Added
 
 - Whisper transcripts are now post-processed into prose-shaped paragraphs (~3–6 sentences each) before being injected into the EPUB content XHTMLs, instead of one `<p>` per Whisper segment. The merge is a single-pass greedy state machine with sentence-terminator detection, decimal-number / Dutch-abbreviation false-positive guards, and a max-character safety valve for hallucinated unpunctuated runs. Each cleaned paragraph carries a stable `id="tx-<section>-<para>"` so a future per-paragraph Media Overlay sync milestone can reference it without re-rendering the XHTML. Pass `--no-text-cleanup` to keep the raw per-segment output for debugging.

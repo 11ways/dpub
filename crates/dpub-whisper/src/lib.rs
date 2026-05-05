@@ -64,66 +64,99 @@ pub struct TranscribeOptions {
     pub language: String,
 }
 
-/// Transcribe a single audio file to a flat list of timed text segments.
+/// Owns a loaded Whisper model and lets you transcribe many audio files
+/// against it without re-loading the GGML weights every time.
 ///
-/// Pipeline:
-///
-/// 1. Decode `audio_path` to floating-point PCM with symphonia.
-/// 2. Resample to 16 kHz mono (Whisper's required input format) with rubato.
-/// 3. Run whisper.cpp full inference and walk the returned segments.
-///
-/// Returns segments in chronological order.
-pub fn transcribe(audio_path: &Path, options: &TranscribeOptions) -> Result<Vec<Segment>> {
-    let samples = decode::decode_to_mono_16khz(audio_path)?;
+/// Loading a medium-size GGML model (~1.5 GB) takes several seconds and
+/// allocates the same amount on the GPU when built with `metal` /
+/// `cuda`. A typical talking book has 30+ audio files; constructing one
+/// `Transcriber` and reusing it across the whole book amortises that
+/// cost. Each [`Transcriber::transcribe`] call still creates a fresh
+/// decoder state internally, so per-file decoding stays independent.
+pub struct Transcriber {
+    ctx: WhisperContext,
+    language: String,
+}
 
-    let ctx = WhisperContext::new_with_params(
-        options
-            .model_path
-            .to_str()
-            .ok_or_else(|| Error::InvalidModelPath(options.model_path.clone()))?,
-        WhisperContextParameters::default(),
-    )
-    .map_err(|source| Error::ModelLoad {
-        path: options.model_path.clone(),
-        source,
-    })?;
-
-    let mut state = ctx.create_state().map_err(Error::Whisper)?;
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_language(Some(&options.language));
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_special(false);
-    params.set_print_timestamps(false);
-
-    state.full(params, &samples).map_err(Error::Whisper)?;
-
-    let count = state.full_n_segments();
-    #[allow(clippy::cast_sign_loss)]
-    let cap = count.max(0) as usize;
-    let mut out = Vec::with_capacity(cap);
-    for i in 0..count {
-        let Some(seg) = state.get_segment(i) else {
-            continue;
-        };
-        let t0 = seg.start_timestamp();
-        let t1 = seg.end_timestamp();
-        let text = seg
-            .to_str_lossy()
-            .map_err(Error::Whisper)?
-            .trim()
-            .to_owned();
-
-        // whisper.cpp returns time in centiseconds (10 ms units).
-        #[allow(clippy::cast_precision_loss)]
-        let start = (t0 as f64) / 100.0;
-        #[allow(clippy::cast_precision_loss)]
-        let end = (t1 as f64) / 100.0;
-        out.push(Segment {
-            start_seconds: start,
-            end_seconds: end,
-            text,
-        });
+impl Transcriber {
+    /// Load a GGML model and bind it to a target language. The expensive
+    /// part — the file → buffer → GPU copy — happens here, once.
+    pub fn new(options: &TranscribeOptions) -> Result<Self> {
+        let ctx = WhisperContext::new_with_params(
+            options
+                .model_path
+                .to_str()
+                .ok_or_else(|| Error::InvalidModelPath(options.model_path.clone()))?,
+            WhisperContextParameters::default(),
+        )
+        .map_err(|source| Error::ModelLoad {
+            path: options.model_path.clone(),
+            source,
+        })?;
+        Ok(Self {
+            ctx,
+            language: options.language.clone(),
+        })
     }
-    Ok(out)
+
+    /// Transcribe one audio file to a flat list of timed text segments.
+    ///
+    /// Pipeline:
+    ///
+    /// 1. Decode `audio_path` to floating-point PCM with symphonia.
+    /// 2. Resample to 16 kHz mono (Whisper's required input format) with rubato.
+    /// 3. Run whisper.cpp full inference and walk the returned segments.
+    ///
+    /// Each call gets a fresh `WhisperState` so decoder caches don't
+    /// leak between files. Returns segments in chronological order.
+    pub fn transcribe(&self, audio_path: &Path) -> Result<Vec<Segment>> {
+        let samples = decode::decode_to_mono_16khz(audio_path)?;
+
+        let mut state = self.ctx.create_state().map_err(Error::Whisper)?;
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some(&self.language));
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_special(false);
+        params.set_print_timestamps(false);
+
+        state.full(params, &samples).map_err(Error::Whisper)?;
+
+        let count = state.full_n_segments();
+        #[allow(clippy::cast_sign_loss)]
+        let cap = count.max(0) as usize;
+        let mut out = Vec::with_capacity(cap);
+        for i in 0..count {
+            let Some(seg) = state.get_segment(i) else {
+                continue;
+            };
+            let t0 = seg.start_timestamp();
+            let t1 = seg.end_timestamp();
+            let text = seg
+                .to_str_lossy()
+                .map_err(Error::Whisper)?
+                .trim()
+                .to_owned();
+
+            // whisper.cpp returns time in centiseconds (10 ms units).
+            #[allow(clippy::cast_precision_loss)]
+            let start = (t0 as f64) / 100.0;
+            #[allow(clippy::cast_precision_loss)]
+            let end = (t1 as f64) / 100.0;
+            out.push(Segment {
+                start_seconds: start,
+                end_seconds: end,
+                text,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// One-shot convenience: build a [`Transcriber`] and use it for a single
+/// file. Prefer [`Transcriber::new`] + [`Transcriber::transcribe`] when
+/// you have multiple files to process — the model load is the expensive
+/// part and you want to amortise it.
+pub fn transcribe(audio_path: &Path, options: &TranscribeOptions) -> Result<Vec<Segment>> {
+    Transcriber::new(options)?.transcribe(audio_path)
 }
