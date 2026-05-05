@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- `dpub-audio` passes `-map_metadata 0` explicitly to ffmpeg when re-encoding MP3 → Opus. This preserves container-level metadata (ID3 tags → Vorbis comments where mappable) across the format change, restoring the intent that legitimate producer/accessibility metadata survives into the EPUB. Already the ffmpeg default for our output format, but now explicit so future ffmpeg releases can't quietly change behaviour.
 - `dpub-whisper` exposes a new `Transcriber` struct that owns the loaded GGML model and offers a `transcribe(&self, audio_path)` method. `dpub-convert::inject_transcripts` now constructs one `Transcriber` per book and reuses it across every audio file, instead of re-loading the model per call. Closes #10. Saves ~3–5 minutes wallclock on a 30-section book and avoids per-file Metal/CUDA buffer churn. The free `dpub_whisper::transcribe(audio, opts)` function is preserved as a one-shot convenience for the smoke test.
 
 ### Added
