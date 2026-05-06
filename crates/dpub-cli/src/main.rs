@@ -4,6 +4,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use dpub_core::{Book, NavItem};
 
+mod doctor;
+mod install;
+mod setup;
+
 #[derive(Parser)]
 #[command(name = "dpub", version, about = "DAISY 2.02 → EPUB 3 toolkit")]
 struct Cli {
@@ -94,6 +98,30 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Diagnose build state, runtime tools, and cached Whisper models.
+    /// Read-only; pass `--install` to invoke the platform's package
+    /// manager for missing tools after explicit consent.
+    Doctor {
+        /// Emit the structured report as JSON on stdout instead of
+        /// the human-readable summary.
+        #[arg(long)]
+        json: bool,
+        /// Offer to install missing tools using the platform's
+        /// package manager (`brew` / `apt-get` / `dnf`). Requires
+        /// per-tool confirmation unless `--yes` is also passed.
+        #[arg(long)]
+        install: bool,
+        /// Skip per-tool confirmation when `--install` is set.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Set up dpub's per-user data: Whisper model cache, etc.
+    Setup {
+        /// Download a GGML Whisper model into the cache. One of:
+        /// `tiny`, `base`, `small`, `medium`, `large-v3`.
+        #[arg(long, value_name = "SIZE")]
+        whisper_model: Option<String>,
+    },
     /// Convert every DAISY 2.02 book under `<input>` to EPUB 3, in
     /// parallel. A "book" is any directory containing an `ncc.html`.
     /// Writes a JSON summary to stdout when finished. Per-book errors
@@ -179,6 +207,8 @@ fn main() -> Result<()> {
         ),
         Command::Validate { epub, json } => cmd_validate(&epub, json),
         Command::A11y { epub, json } => cmd_a11y(&epub, json),
+        Command::Doctor { json, install, yes } => cmd_doctor(json, install, yes),
+        Command::Setup { whisper_model } => cmd_setup(whisper_model.as_deref()),
         Command::Batch {
             input,
             output,
@@ -228,7 +258,7 @@ fn cmd_convert(
         (Some(language), Some(model_path)) => {
             if !model_path.is_file() {
                 anyhow::bail!(
-                    "Whisper model not found at {} (download from https://huggingface.co/ggerganov/whisper.cpp)",
+                    "Whisper model not found at {} (run `dpub setup --whisper-model medium` to download one)",
                     model_path.display()
                 );
             }
@@ -241,8 +271,26 @@ fn cmd_convert(
                 language,
             })
         }
-        (Some(_), None) => {
-            anyhow::bail!("--transcribe requires --whisper-model");
+        (Some(language), None) => {
+            // Auto-discover: pick the most-recently-modified ggml-*.bin
+            // in dpub's per-user cache. If none, prompt on TTY (B.1)
+            // or fail with a hint.
+            let Some(model_path) = resolve_or_prompt_for_model()? else {
+                anyhow::bail!(
+                    "no Whisper model found in {}. \
+                     Run `dpub setup --whisper-model medium` to download one, \
+                     or pass `--whisper-model <path>` directly.",
+                    setup::cache_dir().display(),
+                );
+            };
+            println!(
+                "  Transcribe: lang={language} model={} (auto-discovered)",
+                model_path.display()
+            );
+            Some(dpub_convert::TranscribeOptions {
+                model_path,
+                language,
+            })
         }
         (None, Some(_)) => {
             anyhow::bail!("--whisper-model requires --transcribe");
@@ -332,6 +380,94 @@ fn cmd_a11y(epub: &std::path::Path, json: bool) -> Result<()> {
     if !report.is_clean() {
         anyhow::bail!("accessibility checker reported errors");
     }
+    Ok(())
+}
+
+/// Look for a Whisper model the user already downloaded via
+/// `dpub setup`. Returns `Some(path)` if a cached model exists,
+/// `None` otherwise. On a TTY with no cached model, prompts the
+/// user to download `medium` (Tier B.1).
+///
+/// The non-interactive guard (`DPUB_NONINTERACTIVE=1` or non-TTY
+/// stdin/stderr) skips the prompt and returns `None` so the caller
+/// can produce a static failure message.
+fn resolve_or_prompt_for_model() -> Result<Option<PathBuf>> {
+    if let Some(path) = setup::most_recent_model() {
+        return Ok(Some(path));
+    }
+    if should_prompt_for_install() {
+        return prompt_and_install_default_model();
+    }
+    Ok(None)
+}
+
+/// `true` when stdin and stderr are both TTYs and the
+/// `DPUB_NONINTERACTIVE` env var is unset.
+fn should_prompt_for_install() -> bool {
+    use std::io::IsTerminal;
+    if std::env::var_os("DPUB_NONINTERACTIVE").is_some() {
+        return false;
+    }
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// Prompt the user to download the default `medium` Whisper model.
+/// Returns the cached path on consent; `None` on decline.
+fn prompt_and_install_default_model() -> Result<Option<PathBuf>> {
+    eprintln!();
+    eprintln!(
+        "No Whisper model found in {}.",
+        setup::cache_dir().display(),
+    );
+    eprint!("Download ggml-medium.bin (≈ 1.5 GB)? [Y/n] ");
+    std::io::Write::flush(&mut std::io::stderr()).ok();
+
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).context("read stdin")?;
+    let answer = answer.trim().to_ascii_lowercase();
+    if !(answer.is_empty() || answer == "y" || answer == "yes") {
+        return Ok(None);
+    }
+    let spec = setup::lookup("medium").expect("medium is a known size");
+    let path = setup::install_model(spec)?;
+    Ok(Some(path))
+}
+
+fn cmd_doctor(json: bool, install: bool, yes: bool) -> Result<()> {
+    let report = doctor::diagnose();
+    if json {
+        let s = serde_json::to_string_pretty(&report).context("serialise doctor report")?;
+        println!("{s}");
+        return Ok(());
+    }
+    doctor::print_report(&report);
+    if install {
+        println!();
+        crate::install::run_install(&report, yes)?;
+        println!();
+        println!("Re-running doctor to confirm:");
+        println!();
+        let after = doctor::diagnose();
+        doctor::print_report(&after);
+    }
+    Ok(())
+}
+
+fn cmd_setup(whisper_model: Option<&str>) -> Result<()> {
+    let Some(size) = whisper_model else {
+        anyhow::bail!(
+            "nothing to set up. Pass --whisper-model <size> (one of: {})",
+            setup::known_size_names().join(", "),
+        );
+    };
+    let Some(spec) = setup::lookup(size) else {
+        anyhow::bail!(
+            "unknown whisper-model size {size:?}. Known sizes: {}",
+            setup::known_size_names().join(", "),
+        );
+    };
+    let path = setup::install_model(spec)?;
+    println!("Default model for `dpub convert --transcribe`: {}", path.display());
     Ok(())
 }
 
