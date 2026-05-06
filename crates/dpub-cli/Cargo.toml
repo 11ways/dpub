@@ -22,10 +22,10 @@ metal = ["dpub-convert/metal"]
 cuda = ["dpub-convert/cuda"]
 
 [dependencies]
-dpub-audio = { path = "../dpub-audio", version = "0.1.0-dev" }
-dpub-core = { path = "../dpub-core", version = "0.1.0-dev" }
-dpub-convert = { path = "../dpub-convert", version = "0.1.0-dev" }
-dpub-validate = { path = "../dpub-validate", version = "0.1.0-dev" }
+dpub-audio = { path = "../dpub-audio", version = "0.5.0" }
+dpub-core = { path = "../dpub-core", version = "0.5.0" }
+dpub-convert = { path = "../dpub-convert", version = "0.5.0" }
+dpub-validate = { path = "../dpub-validate", version = "0.5.0" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 rayon = { workspace = true }

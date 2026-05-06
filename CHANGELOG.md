@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-06
+
+First tagged release. Feature-complete for the v1 candidate: DAISY 2.02 → EPUB 3 conversion with Media Overlays, EPUBCheck-clean output, ACE accessibility validation, MP3 → Opus audio recompression, local Whisper transcription with prose-shaped paragraph cleanup, automatic and explicit cover lookup, parallel batch conversion, JSON output for CI/pipeline use. No API stability commitment yet — that comes with 1.0.
+
 ### Added
 
 - `dpub convert --rights "<text>"` stamps a free-text `<dc:rights>` element into the EPUB's OPF metadata. When the flag is omitted, the source DAISY's `dc:rights` (if present in the NCC) carries through; the flag overrides. Useful for explicitly asserting copyright frame (Marrakesh Treaty / EU accessibility exception, etc.) when the source doesn't carry one. Closes #21.

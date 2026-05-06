@@ -18,4 +18,4 @@ thiserror = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
-epub3-writer = { path = "../epub3-writer", version = "0.1.0-dev" }
+epub3-writer = { path = "../epub3-writer", version = "0.5.0" }
