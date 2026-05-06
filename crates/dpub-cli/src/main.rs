@@ -52,6 +52,14 @@ enum Command {
         /// output; not recommended for distribution.
         #[arg(long)]
         no_text_cleanup: bool,
+        /// Skip per-word Media Overlay sync. Word-level sync (the
+        /// default for transcribed books) drives karaoke-style
+        /// highlight-along-with-audio in compatible reading systems
+        /// (Thorium, Readium). Pass this flag to fall back to
+        /// per-paragraph sync — produces a smaller SMIL at the cost
+        /// of a coarser reading experience.
+        #[arg(long)]
+        no_word_sync: bool,
         /// Path to a JPEG or PNG image to embed as the EPUB cover.
         #[arg(long, value_name = "PATH", conflicts_with = "auto_cover")]
         cover: Option<PathBuf>,
@@ -150,6 +158,7 @@ fn main() -> Result<()> {
             transcribe,
             whisper_model,
             no_text_cleanup,
+            no_word_sync,
             cover,
             auto_cover,
             rights,
@@ -163,6 +172,7 @@ fn main() -> Result<()> {
             transcribe,
             whisper_model,
             no_text_cleanup,
+            no_word_sync,
             cover,
             auto_cover,
             rights,
@@ -190,6 +200,7 @@ fn cmd_convert(
     transcribe: Option<String>,
     whisper_model: Option<PathBuf>,
     no_text_cleanup: bool,
+    no_word_sync: bool,
     cover: Option<PathBuf>,
     auto_cover: bool,
     rights: Option<String>,
@@ -255,6 +266,7 @@ fn cmd_convert(
         cover,
         auto_cover,
         rights,
+        no_word_sync,
     };
     let start = std::time::Instant::now();
     dpub_convert::convert_to_file(&book, output, &opts)
@@ -545,6 +557,7 @@ fn cmd_batch(
         cover: None,
         auto_cover: false,
         rights: None,
+        no_word_sync: false,
     };
     let start = std::time::Instant::now();
     let entries: Vec<BatchEntry> = books

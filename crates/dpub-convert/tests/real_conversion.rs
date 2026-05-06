@@ -122,6 +122,7 @@ fn opus_recompression_shrinks_real_book() {
             cover: None,
             auto_cover: false,
             rights: None,
+            no_word_sync: false,
         },
     )
     .expect("write opus");

@@ -113,6 +113,7 @@ Walks the input directory for every `ncc.html`, converts each book in parallel v
 | **M4** | Built-in validation (EPUBCheck + ACE) — `dpub validate`, `dpub a11y`. ✅ |
 | **M5** | Audio recompression (MP3 → Opus) — `dpub convert --audio opus --bitrate <kbps>`. ✅ |
 | **M6** | Whisper transcription for audio-only books — `dpub convert --transcribe <lang> --whisper-model <path>`. ✅ (segments are merged into prose-shaped paragraphs by default; pass `--no-text-cleanup` for raw output) |
+| **M6.5** | Word-level Media Overlay sync — karaoke-style highlight-along-with-audio in reading systems that honour Media Overlays. Default-on with `--transcribe`; pass `--no-word-sync` to fall back to per-paragraph sync. ✅ |
 | **Tier 1 polish** | Whisper model caching, cover lookup (`--cover` and `--auto-cover`), parallel batch mode, JSON output for validators. ✅ |
 | **M7** | WASM build for browser-based conversion (planned scope: `info` + `validate` only — Whisper / ffmpeg are too heavy for a browser tab). |
 | **M8** | 1.0 release: signed binaries for macOS / Linux / Windows. |

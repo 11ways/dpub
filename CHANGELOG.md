@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- **Word-level Media Overlay sync** (M6.5). When `--transcribe` runs and the cleanup path is active, dpub now extracts per-token timestamps from whisper.cpp, coalesces BPE pieces back into whole words via a leading-space rule (with punctuation attachment and degenerate-timing clamping), wraps each word in a `<span id="w-NNN-MMM-KKK">` inside the cleaned `<p id="tx-NNN-MMM">`, and emits one SMIL `<par>` per word — wrapped in nested `<seq epub:textref="...#tx-...">` per paragraph. The result is karaoke-style highlight-along-with-audio in compatible reading systems (Thorium, Readium). Default-on; pass `--no-word-sync` to fall back to per-paragraph sync. Workspace EPUBCheck assertions extended to gate the new overlay shape; reference book stays 0/0/0.
+- `dpub-whisper` exposes a public `Word { start_seconds, end_seconds, text }` struct and `Segment.words: Vec<Word>` populated by the new BPE coalescer (`crates/dpub-whisper/src/words.rs`). Eight unit tests cover the BPE coalescing rules.
+
 ## [0.5.0] - 2026-05-06
 
 First tagged release. Feature-complete for the v1 candidate: DAISY 2.02 → EPUB 3 conversion with Media Overlays, EPUBCheck-clean output, ACE accessibility validation, MP3 → Opus audio recompression, local Whisper transcription with prose-shaped paragraph cleanup, automatic and explicit cover lookup, parallel batch conversion, JSON output for CI/pipeline use. No API stability commitment yet — that comes with 1.0.

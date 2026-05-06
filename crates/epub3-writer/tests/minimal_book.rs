@@ -296,6 +296,113 @@ fn epubcheck_clean_with_cover_when_available() {
     );
 }
 
+/// Build a minimal publication whose Media Overlay uses **word-level**
+/// sync — nested `<seq epub:textref="...#tx-...">` per paragraph
+/// wrapping per-word `<par>` entries. Mirrors what `dpub-convert`
+/// produces with M6.5 word-level sync enabled. Asserts EPUBCheck stays
+/// clean for the new structure.
+#[test]
+fn epubcheck_clean_with_word_level_overlay_when_available() {
+    let Ok(epubcheck) = which("epubcheck") else {
+        eprintln!("epubcheck not on PATH — skipping");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audio_path = dir.path().join("tiny.mp3");
+    std::fs::write(&audio_path, TINY_MP3).expect("write audio fixture");
+
+    let title = "Word-level sync";
+    // Two-word paragraph anchored as `tx-000-000`. The XHTML body
+    // wraps each word in a `<span id="w-...">` so the overlay's
+    // `<text src="...#w-...">` resolves.
+    let body = r#"<h1 id="h1">Word-level sync</h1>
+  <p id="tx-000-000"><span id="w-000-000-000">Hallo</span> <span id="w-000-000-001">wereld.</span></p>"#;
+    let publication = Publication {
+        metadata: PackageMetadata {
+            identifier: "urn:uuid:00000000-0000-4000-8000-000000000002".into(),
+            title: title.into(),
+            language: "nl".into(),
+            modified: "2026-05-06T00:00:00Z".into(),
+            duration_seconds: Some(0.6),
+            access_modes: vec![AccessMode::Auditory, AccessMode::Textual],
+            ..Default::default()
+        },
+        nav: Nav {
+            toc: vec![NavListItem {
+                label: title.into(),
+                href: "section-001.xhtml".into(),
+                children: vec![],
+            }],
+            page_list: None,
+        },
+        sections: vec![SectionPart {
+            id: "section-001".into(),
+            content: ContentDocument {
+                href: "section-001.xhtml".into(),
+                title: title.into(),
+                language: "nl".into(),
+                body_xhtml: body.into(),
+            },
+            overlay: Some(MediaOverlay {
+                href: "media-overlays/section-001.smil".into(),
+                duration_seconds: 0.6,
+                root: OverlaySeq {
+                    textref: Some("../section-001.xhtml".into()),
+                    children: vec![OverlayItem::Seq(OverlaySeq {
+                        textref: Some("../section-001.xhtml#tx-000-000".into()),
+                        children: vec![
+                            OverlayItem::Par(OverlayPar {
+                                id: Some("w-000-000-000".into()),
+                                text_src: "../section-001.xhtml#w-000-000-000".into(),
+                                audio_src: "../audio/tiny.mp3".into(),
+                                clip_begin_seconds: 0.0,
+                                clip_end_seconds: 0.3,
+                            }),
+                            OverlayItem::Par(OverlayPar {
+                                id: Some("w-000-000-001".into()),
+                                text_src: "../section-001.xhtml#w-000-000-001".into(),
+                                audio_src: "../audio/tiny.mp3".into(),
+                                clip_begin_seconds: 0.3,
+                                clip_end_seconds: 0.6,
+                            }),
+                        ],
+                    })],
+                },
+            }),
+        }],
+        audio_files: vec![AudioFile {
+            id: "audio-tiny".into(),
+            href: "audio/tiny.mp3".into(),
+            source_path: audio_path.clone(),
+            media_type: "audio/mpeg".into(),
+        }],
+        cover: None,
+    };
+
+    let epub_path = dir.path().join("word-sync.epub");
+    let mut out = File::create(&epub_path).expect("create");
+    publication.write_zip(&mut out).expect("write");
+
+    let output = Command::new(epubcheck)
+        .arg(&epub_path)
+        .output()
+        .expect("run epubcheck");
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        output.status.success(),
+        "epubcheck reported errors on word-level overlay:\n{combined}",
+    );
+    assert!(
+        !combined.contains("WARNING"),
+        "epubcheck emitted warnings on word-level overlay:\n{combined}",
+    );
+}
+
 fn which(name: &str) -> std::io::Result<std::path::PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     for entry in std::env::split_paths(&path) {
