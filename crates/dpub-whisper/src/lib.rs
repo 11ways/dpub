@@ -36,6 +36,7 @@
 
 mod decode;
 mod error;
+mod words;
 
 pub use error::{Error, Result};
 
@@ -46,10 +47,31 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 /// One transcribed time-range with the text Whisper produced for it.
 ///
 /// Times are in seconds (whisper.cpp returns centiseconds; we convert).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Segment {
     pub start_seconds: f64,
     pub end_seconds: f64,
+    pub text: String,
+    /// Per-word timings derived from whisper.cpp's per-token data, with
+    /// BPE subword pieces coalesced back into whole words. Empty when
+    /// `text` is empty; otherwise one entry per visible word in the
+    /// segment, in chronological order.
+    pub words: Vec<Word>,
+}
+
+/// One transcribed word with its audio time range.
+///
+/// Used to drive per-word SMIL Media Overlay sync (`<par>` per word in
+/// the produced EPUB). Times are in seconds; whisper.cpp's token
+/// timestamps are notoriously approximate (~100–300 ms tolerance), so
+/// callers should not rely on word boundaries being lip-sync-accurate.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Word {
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    /// The visible word text, with no leading whitespace. Trailing
+    /// punctuation that the whisper tokenizer emitted as a separate
+    /// token is attached here (e.g. `"wereld."`).
     pub text: String,
 }
 
@@ -138,6 +160,33 @@ impl Transcriber {
                 .trim()
                 .to_owned();
 
+            // Walk every token in this segment and collect the raw
+            // (text, t0, t1) triples for the coalescer. whisper.cpp
+            // emits BPE tokens; the coalescer turns them back into
+            // visible words with sensible audio time ranges.
+            let n_tokens = seg.n_tokens();
+            #[allow(clippy::cast_sign_loss)]
+            let tok_cap = n_tokens.max(0) as usize;
+            let mut raw_tokens: Vec<words::RawToken<'_>> = Vec::with_capacity(tok_cap);
+            for j in 0..n_tokens {
+                let Some(tok) = seg.get_token(j) else {
+                    continue;
+                };
+                // Defensive: skip tokens whose text isn't valid UTF-8.
+                // Whisper occasionally emits partial multibyte sequences
+                // mid-word; we'd rather drop a token than poison the segment.
+                let Ok(token_text) = tok.to_str() else {
+                    continue;
+                };
+                let data = tok.token_data();
+                raw_tokens.push(words::RawToken {
+                    text: token_text,
+                    t0_cs: data.t0,
+                    t1_cs: data.t1,
+                });
+            }
+            let words_vec = words::coalesce(&raw_tokens, t0, t1);
+
             // whisper.cpp returns time in centiseconds (10 ms units).
             #[allow(clippy::cast_precision_loss)]
             let start = (t0 as f64) / 100.0;
@@ -147,6 +196,7 @@ impl Transcriber {
                 start_seconds: start,
                 end_seconds: end,
                 text,
+                words: words_vec,
             });
         }
         Ok(out)

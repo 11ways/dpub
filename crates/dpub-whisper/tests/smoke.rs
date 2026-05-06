@@ -39,7 +39,24 @@ fn transcribes_when_model_and_audio_are_provided() {
             "  [{:>6.2}s – {:>6.2}s] {}",
             s.start_seconds, s.end_seconds, s.text
         );
+        for w in s.words.iter().take(8) {
+            eprintln!(
+                "      [{:>6.2}s – {:>6.2}s] {}",
+                w.start_seconds, w.end_seconds, w.text
+            );
+        }
     }
     // Allow zero segments for pure silence/sine input — that's not a bug,
     // it's whisper correctly recognising "no speech".
+    // For non-empty segments, the per-word coalescer should always
+    // produce at least one word.
+    for s in &segments {
+        if !s.text.is_empty() {
+            assert!(
+                !s.words.is_empty(),
+                "segment with non-empty text {:?} has empty words",
+                s.text,
+            );
+        }
+    }
 }

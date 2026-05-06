@@ -564,6 +564,13 @@ pub struct ConvertOptions {
     /// is the simplest way to assert rights when the source
     /// doesn't carry one.
     pub rights: Option<String>,
+    /// When `true`, skip per-word Media Overlay sync and fall back
+    /// to per-paragraph sync. Default `false` — the cleanup path
+    /// emits one SMIL `<par>` per word, anchored to per-word
+    /// `<span>`s in the content XHTML, for karaoke-style
+    /// highlight-along-with-audio. Set this to keep SMIL files
+    /// small at the cost of a coarser reading experience.
+    pub no_word_sync: bool,
 }
 
 /// Convert and write a DAISY 2.02 publication to an EPUB 3 file in one call.
@@ -596,6 +603,7 @@ pub fn convert_to_file(book: &Book, output: &Path, opts: &ConvertOptions) -> Res
             &mut publication,
             transcribe,
             opts.raw_transcript_segments,
+            opts.no_word_sync,
         )?;
     }
 
@@ -713,6 +721,7 @@ fn inject_transcripts(
     publication: &mut Publication,
     opts: &TranscribeOptions,
     raw_segments: bool,
+    no_word_sync: bool,
 ) -> Result<()> {
     let whisper_opts = dpub_whisper::TranscribeOptions {
         model_path: opts.model_path.clone(),
@@ -746,8 +755,11 @@ fn inject_transcripts(
             cache.insert(audio_basename.clone(), segments);
         }
 
-        // Collect the in-range segments in document order.
+        // Collect the in-range segments in document order, paired with
+        // the audio basename each came from so the cleanup state machine
+        // can flush at audio-file boundaries.
         let mut section_segments: Vec<dpub_whisper::Segment> = Vec::new();
+        let mut section_audio_srcs: Vec<String> = Vec::new();
         for (audio_basename, t0, t1) in &audio_ranges {
             let Some(segments) = cache.get(audio_basename) else {
                 continue;
@@ -756,6 +768,7 @@ fn inject_transcripts(
                 let mid = (seg.start_seconds + seg.end_seconds) * 0.5;
                 if mid >= *t0 && mid <= *t1 && !seg.text.is_empty() {
                     section_segments.push(seg.clone());
+                    section_audio_srcs.push(audio_basename.clone());
                 }
             }
         }
@@ -765,9 +778,27 @@ fn inject_transcripts(
         } else {
             let cleaned = text_cleanup::merge_into_paragraphs(
                 &section_segments,
+                &section_audio_srcs,
                 &text_cleanup::CleanupOpts::default(),
             );
-            render_cleaned_paragraphs(idx, &cleaned)
+            let html = render_cleaned_paragraphs(idx, &cleaned);
+            // Word-level Media Overlay sync: rebuild this section's
+            // overlay from the cleaned paragraphs, replacing the
+            // heading-level shell that build_sections constructed.
+            // The new overlay drives karaoke-style highlighting in
+            // reading systems (Thorium etc.) that honour Media Overlays.
+            if !no_word_sync
+                && cleaned.iter().any(|p| !p.words.is_empty())
+                && let Some(overlay) = section_part.overlay.as_mut()
+            {
+                let new_root = build_word_overlay_seq(
+                    &section_part.content.href,
+                    idx,
+                    &cleaned,
+                );
+                overlay.root = new_root;
+            }
+            html
         };
         if !new_paragraphs.is_empty() {
             section_part.content.body_xhtml.push_str(&new_paragraphs);
@@ -791,19 +822,92 @@ fn render_raw_paragraphs(section_idx: usize, segments: &[dpub_whisper::Segment])
     out
 }
 
+/// Build a fresh `OverlaySeq` for a section from the cleaned paragraphs
+/// produced by `text_cleanup::merge_into_paragraphs`.
+///
+/// Shape: an outer `<seq epub:textref="../content/sNN.xhtml">` wrapping
+/// one inner `<seq epub:textref="...#tx-NNN-MMM">` per paragraph, each
+/// wrapping one `<par id="w-NNN-MMM-KKK">` per word. This gives reading
+/// systems (Thorium, Readium) a structural place to scope highlight to
+/// "current paragraph" while still tracking the spoken word.
+///
+/// The `content_href` is EPUB-relative to the OPF (e.g.
+/// `content/section-001.xhtml`); SMIL lives in `media-overlays/` so
+/// every emitted `src` starts with `../`.
+fn build_word_overlay_seq(
+    content_href: &str,
+    section_idx: usize,
+    paragraphs: &[text_cleanup::Paragraph],
+) -> OverlaySeq {
+    let mut top_children: Vec<OverlayItem> = Vec::with_capacity(paragraphs.len());
+    for (para_idx, para) in paragraphs.iter().enumerate() {
+        if para.words.is_empty() {
+            continue;
+        }
+        let para_anchor = format!("tx-{section_idx:03}-{para_idx:03}");
+        let para_textref = format!("../{content_href}#{para_anchor}");
+        let audio_src = format!("../audio/{}", para.audio_src);
+
+        let mut word_children: Vec<OverlayItem> = Vec::with_capacity(para.words.len());
+        for (word_idx, word) in para.words.iter().enumerate() {
+            let word_id = format!("w-{section_idx:03}-{para_idx:03}-{word_idx:03}");
+            word_children.push(OverlayItem::Par(OverlayPar {
+                id: Some(word_id.clone()),
+                text_src: format!("../{content_href}#{word_id}"),
+                audio_src: audio_src.clone(),
+                clip_begin_seconds: word.start_seconds,
+                clip_end_seconds: word.end_seconds,
+            }));
+        }
+        top_children.push(OverlayItem::Seq(OverlaySeq {
+            textref: Some(para_textref),
+            children: word_children,
+        }));
+    }
+    OverlaySeq {
+        textref: Some(format!("../{content_href}")),
+        children: top_children,
+    }
+}
+
 fn render_cleaned_paragraphs(
     section_idx: usize,
     paragraphs: &[text_cleanup::Paragraph],
 ) -> String {
     let mut out = String::new();
     for (para_idx, para) in paragraphs.iter().enumerate() {
+        if para.words.is_empty() {
+            // Whisper run with no per-word data (or test fixture
+            // without words). Fall back to a flat <p> with the
+            // paragraph text.
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!(
+                    "  <p id=\"tx-{section_idx:03}-{para_idx:03}\">{}</p>\n",
+                    escape_text(&para.text)
+                ),
+            );
+            continue;
+        }
+        // Emit one <span id="w-..."> per word, separated by single ASCII
+        // spaces so reading systems render natural word spacing.
         let _ = std::fmt::Write::write_fmt(
             &mut out,
-            format_args!(
-                "  <p id=\"tx-{section_idx:03}-{para_idx:03}\">{}</p>\n",
-                escape_text(&para.text)
-            ),
+            format_args!("  <p id=\"tx-{section_idx:03}-{para_idx:03}\">"),
         );
+        for (word_idx, word) in para.words.iter().enumerate() {
+            if word_idx > 0 {
+                out.push(' ');
+            }
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!(
+                    "<span id=\"w-{section_idx:03}-{para_idx:03}-{word_idx:03}\">{}</span>",
+                    escape_text(&word.text)
+                ),
+            );
+        }
+        out.push_str("</p>\n");
     }
     out
 }
@@ -946,6 +1050,169 @@ mod tests {
         assert_eq!(media_type_for("foo.flac"), "application/octet-stream");
         assert_eq!(media_type_for("foo"), "application/octet-stream"); // no ext
         assert_eq!(media_type_for(""), "application/octet-stream");
+    }
+
+    #[test]
+    fn render_cleaned_paragraphs_emits_word_spans_when_words_present() {
+        let para = text_cleanup::Paragraph {
+            start_seconds: 0.0,
+            end_seconds: 1.5,
+            text: "Hallo wereld.".into(),
+            words: vec![
+                dpub_whisper::Word {
+                    start_seconds: 0.0,
+                    end_seconds: 0.5,
+                    text: "Hallo".into(),
+                },
+                dpub_whisper::Word {
+                    start_seconds: 0.5,
+                    end_seconds: 1.5,
+                    text: "wereld.".into(),
+                },
+            ],
+            audio_src: "a.mp3".into(),
+        };
+        let html = render_cleaned_paragraphs(7, &[para]);
+        assert!(
+            html.contains(r#"<p id="tx-007-000">"#),
+            "missing paragraph id: {html}"
+        );
+        assert!(
+            html.contains(r#"<span id="w-007-000-000">Hallo</span>"#),
+            "missing first word span: {html}"
+        );
+        assert!(
+            html.contains(r#"<span id="w-007-000-001">wereld.</span>"#),
+            "missing second word span: {html}"
+        );
+        // Single ASCII space between word spans.
+        assert!(
+            html.contains("</span> <span"),
+            "missing inter-span space: {html}"
+        );
+    }
+
+    #[test]
+    fn render_cleaned_paragraphs_falls_back_to_flat_p_without_words() {
+        // Defensive: when a Paragraph has no per-word data (test fixture
+        // without words, or a Whisper run that returned empty word list)
+        // the renderer must still emit something readable.
+        let para = text_cleanup::Paragraph {
+            start_seconds: 0.0,
+            end_seconds: 1.0,
+            text: "Hallo wereld.".into(),
+            words: vec![],
+            audio_src: "a.mp3".into(),
+        };
+        let html = render_cleaned_paragraphs(0, &[para]);
+        assert!(
+            html.contains(r#"<p id="tx-000-000">Hallo wereld.</p>"#),
+            "expected flat <p> fallback, got: {html}"
+        );
+        assert!(!html.contains("<span"), "no spans in fallback: {html}");
+    }
+
+    #[test]
+    fn build_word_overlay_seq_produces_nested_seqs_per_paragraph() {
+        let para = text_cleanup::Paragraph {
+            start_seconds: 0.0,
+            end_seconds: 2.0,
+            text: "Hallo wereld.".into(),
+            words: vec![
+                dpub_whisper::Word {
+                    start_seconds: 0.0,
+                    end_seconds: 0.5,
+                    text: "Hallo".into(),
+                },
+                dpub_whisper::Word {
+                    start_seconds: 0.5,
+                    end_seconds: 2.0,
+                    text: "wereld.".into(),
+                },
+            ],
+            audio_src: "07_Inleiding.mp3".into(),
+        };
+        let root = build_word_overlay_seq("content/sec.xhtml", 7, &[para]);
+        assert_eq!(root.textref.as_deref(), Some("../content/sec.xhtml"));
+        assert_eq!(root.children.len(), 1);
+
+        let OverlayItem::Seq(para_seq) = &root.children[0] else {
+            panic!("expected paragraph-level <seq>, got {:?}", root.children[0]);
+        };
+        assert_eq!(
+            para_seq.textref.as_deref(),
+            Some("../content/sec.xhtml#tx-007-000")
+        );
+        assert_eq!(para_seq.children.len(), 2);
+
+        let OverlayItem::Par(first_par) = &para_seq.children[0] else {
+            panic!("expected per-word <par>, got {:?}", para_seq.children[0]);
+        };
+        assert_eq!(first_par.id.as_deref(), Some("w-007-000-000"));
+        assert_eq!(first_par.text_src, "../content/sec.xhtml#w-007-000-000");
+        assert_eq!(first_par.audio_src, "../audio/07_Inleiding.mp3");
+        assert!((first_par.clip_begin_seconds - 0.0).abs() < 1e-9);
+        assert!((first_par.clip_end_seconds - 0.5).abs() < 1e-9);
+
+        let OverlayItem::Par(second_par) = &para_seq.children[1] else {
+            panic!("expected per-word <par>, got {:?}", para_seq.children[1]);
+        };
+        assert_eq!(second_par.id.as_deref(), Some("w-007-000-001"));
+        assert!((second_par.clip_end_seconds - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn build_word_overlay_seq_skips_paragraphs_without_words() {
+        let p1 = text_cleanup::Paragraph {
+            start_seconds: 0.0,
+            end_seconds: 1.0,
+            text: "no words here".into(),
+            words: vec![],
+            audio_src: "a.mp3".into(),
+        };
+        let p2 = text_cleanup::Paragraph {
+            start_seconds: 1.0,
+            end_seconds: 2.0,
+            text: "Hi".into(),
+            words: vec![dpub_whisper::Word {
+                start_seconds: 1.0,
+                end_seconds: 2.0,
+                text: "Hi".into(),
+            }],
+            audio_src: "a.mp3".into(),
+        };
+        let root = build_word_overlay_seq("content/x.xhtml", 0, &[p1, p2]);
+        // Paragraph 0 had no words and was skipped; paragraph 1 produced
+        // one inner <seq>.
+        assert_eq!(root.children.len(), 1);
+        let OverlayItem::Seq(inner) = &root.children[0] else {
+            panic!("expected one inner seq");
+        };
+        assert_eq!(
+            inner.textref.as_deref(),
+            Some("../content/x.xhtml#tx-000-001")
+        );
+    }
+
+    #[test]
+    fn render_cleaned_paragraphs_escapes_word_text() {
+        let para = text_cleanup::Paragraph {
+            start_seconds: 0.0,
+            end_seconds: 0.5,
+            text: r#"a<b&c"d"#.into(),
+            words: vec![dpub_whisper::Word {
+                start_seconds: 0.0,
+                end_seconds: 0.5,
+                text: r#"a<b&c"d"#.into(),
+            }],
+            audio_src: "a.mp3".into(),
+        };
+        let html = render_cleaned_paragraphs(0, &[para]);
+        assert!(
+            html.contains("a&lt;b&amp;c"),
+            "expected XML escaping in word text: {html}"
+        );
+        assert!(!html.contains("a<b&c"), "raw < and & must not leak");
     }
 
     #[test]
