@@ -18,7 +18,31 @@ The reference toolchain for this conversion is the [DAISY Pipeline 2](https://da
 
 ## Quickstart
 
-Build from source (requires `cmake` for the bundled `dpub-whisper` crate):
+### First-time setup
+
+Five commands from a fresh clone to a fully-working dpub:
+
+```sh
+# macOS — install build + runtime prerequisites
+brew install cmake epubcheck ffmpeg
+npm install -g @daisy/ace          # optional: enables `dpub a11y`
+
+# Build with the right GPU acceleration for the host
+git clone https://github.com/11ways/dpub && cd dpub
+./scripts/build.sh
+
+# Download a Whisper model (only needed if you'll use --transcribe)
+./target/release/dpub setup --whisper-model medium
+
+# Confirm everything's green
+./target/release/dpub doctor
+```
+
+`./scripts/build.sh` auto-detects Apple Silicon (Metal) / Linux+nvcc (CUDA) / falls back to CPU-only. Power users who want different feature flags call `cargo build --release -p dpub-cli` directly.
+
+`dpub doctor` shows the status of every prerequisite with platform-specific install hints. `dpub setup --whisper-model <size>` downloads a Whisper model into `~/.cache/dpub/models/` with SHA256 verification — `--transcribe` then auto-discovers the most recent cached model so you don't have to thread `--whisper-model <path>` through every invocation. Sizes: `tiny`, `base`, `small`, `medium` (recommended for Dutch), `large-v3`.
+
+### Manual build (if you prefer)
 
 ```sh
 git clone https://github.com/11ways/dpub

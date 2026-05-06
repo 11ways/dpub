@@ -20,6 +20,7 @@
 //! present) ISBN to a third party. Callers should keep the feature
 //! opt-in for that reason.
 
+use std::io::{Read, Write};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -33,6 +34,54 @@ const COVERS_URL: &str = "https://covers.openlibrary.org/b";
 const USER_AGENT_BASE: &str = "dpub";
 const TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_COVER_BYTES: usize = 4 * 1024 * 1024;
+
+/// Build a fresh `ureq::Agent` with dpub's standard configuration:
+/// 8-second timeout, identifying User-Agent. Callers that need a
+/// generic HTTP-download path (Whisper model fetch, etc.) can use
+/// this directly via [`download_to_writer`].
+pub fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(60))
+        .user_agent(&format!(
+            "{USER_AGENT_BASE}/{} (+https://github.com/11ways/dpub)",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build()
+}
+
+/// Stream a URL into `dest`, calling `on_progress(bytes_so_far,
+/// content_length_or_zero)` periodically. Used by the Whisper model
+/// downloader. No `Range` resumption in v1 — a partial file is
+/// truncated on retry.
+///
+/// Returns the total number of bytes written.
+pub fn download_to_writer<W: Write>(
+    agent: &ureq::Agent,
+    url: &str,
+    dest: &mut W,
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<u64> {
+    let resp = agent.get(url).call()?;
+    let content_length: u64 = resp
+        .header("content-length")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let mut reader = resp.into_reader();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    on_progress(0, content_length);
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        dest.write_all(&buf[..n])?;
+        total += n as u64;
+        on_progress(total, content_length);
+    }
+    Ok(total)
+}
 
 /// Identifying bits we have for a book — typically derived from
 /// DAISY 2.02 NCC metadata (`dc:title`, `dc:creator`, `dc:language`,
@@ -187,8 +236,6 @@ fn fetch_cover(agent: &ureq::Agent, candidate: &Candidate) -> Result<FetchedCove
         provenance,
     })
 }
-
-use std::io::Read;
 
 /// Strip whitespace and hyphens from `id` and check if it's 10 or
 /// 13 ASCII digits (with the last char of an ISBN-10 optionally
