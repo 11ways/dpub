@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-07
+
+Word-level Media Overlay sync (karaoke-style highlight-along-with-audio in compatible reading systems) and a major first-run UX overhaul (`dpub doctor`, `dpub setup --whisper-model <size>`, auto-discovery, `scripts/build.sh`, optional `--install` for missing tools).
+
 ### Added
 
 - **First-run UX overhaul.** Three new pieces close the path from `git clone` to a working `dpub convert --transcribe ...` without manual treasure hunts:
