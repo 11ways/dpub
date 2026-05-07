@@ -80,6 +80,15 @@ enum Command {
         /// source DAISY metadata.
         #[arg(long, value_name = "TEXT")]
         rights: Option<String>,
+        /// Path to the book's text (plain text or markdown). Section
+        /// headings are matched against the DAISY NCC; word-level
+        /// timestamps come from Whisper. Requires `--transcribe`.
+        #[arg(long, value_name = "PATH", requires = "transcribe")]
+        ground_truth: Option<PathBuf>,
+        /// How to handle book content the narrator skipped (colophon,
+        /// index, etc.) when using `--ground-truth`.
+        #[arg(long, value_enum, default_value_t = GroundTruthStrategyOpt::NoSync, value_name = "STRATEGY")]
+        ground_truth_strategy: GroundTruthStrategyOpt,
     },
     /// Validate an existing EPUB 3 publication with EPUBCheck.
     Validate {
@@ -179,6 +188,38 @@ impl AudioOpt {
     }
 }
 
+#[derive(Clone, Copy, ValueEnum, Default)]
+enum GroundTruthStrategyOpt {
+    /// Drop ground-truth-only words (colophon etc.) entirely.
+    Drop,
+    /// Include the text but emit no Media Overlay entry — visible in
+    /// the XHTML, no karaoke highlight on those passages. Default.
+    #[default]
+    NoSync,
+    /// Span the available time gap proportionally — highlight bar
+    /// moves through the words at average speed.
+    Bracket,
+}
+
+impl GroundTruthStrategyOpt {
+    fn into_strategy(self) -> dpub_convert::BoundaryStrategy {
+        match self {
+            Self::Drop => dpub_convert::BoundaryStrategy::Drop,
+            Self::NoSync => dpub_convert::BoundaryStrategy::NoSync,
+            Self::Bracket => dpub_convert::BoundaryStrategy::Bracket,
+        }
+    }
+
+    fn parse_str(s: &str) -> Option<Self> {
+        match s {
+            "drop" => Some(Self::Drop),
+            "no-sync" => Some(Self::NoSync),
+            "bracket" => Some(Self::Bracket),
+            _ => None,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     // Load config early so we can use log_level before tracing init.
     let cfg = config::load();
@@ -214,6 +255,8 @@ fn main() -> Result<()> {
             cover,
             no_auto_cover,
             rights,
+            ground_truth,
+            ground_truth_strategy,
         } => {
             let audio = audio.unwrap_or_else(|| parse_audio_opt(&cfg));
             let bitrate = bitrate.unwrap_or_else(|| {
@@ -236,10 +279,26 @@ fn main() -> Result<()> {
                 Some(config::TranscribeSetting::Language(lang)) => Some(lang.clone()),
                 _ => None,
             });
+            // Merge ground truth: CLI > config > none.
+            let ground_truth = ground_truth.or_else(|| cfg.ground_truth.clone());
+            // Merge boundary strategy: CLI > config > NoSync default.
+            // CLI's default is NoSync; we treat it as "not explicitly
+            // set" only when the user passed nothing AND the config
+            // has a value.
+            let boundary_strategy = match (
+                ground_truth_strategy,
+                cfg.ground_truth_strategy
+                    .as_deref()
+                    .and_then(GroundTruthStrategyOpt::parse_str),
+            ) {
+                // CLI was explicitly NoSync (default) and config has a setting → use config.
+                (GroundTruthStrategyOpt::NoSync, Some(cfg_val)) => cfg_val,
+                (cli_val, _) => cli_val,
+            };
             cmd_convert(
                 &ncc, &output, validate, a11y, audio, bitrate, transcribe,
                 whisper_model, no_text_cleanup, no_word_sync, cover,
-                auto_cover, rights,
+                auto_cover, rights, ground_truth, boundary_strategy,
             )
         }
         Command::Validate { epub, json } => cmd_validate(&epub, json),
@@ -287,6 +346,8 @@ fn cmd_convert(
     cover: Option<PathBuf>,
     auto_cover: bool,
     rights: Option<String>,
+    ground_truth: Option<PathBuf>,
+    ground_truth_strategy: GroundTruthStrategyOpt,
 ) -> Result<()> {
     let ncc = resolve_ncc_path(ncc)?;
     let book = Book::from_ncc(&ncc).with_context(|| format!("loading {}", ncc.display()))?;
@@ -361,6 +422,24 @@ fn cmd_convert(
         println!("  Cover: best-effort lookup via Open Library");
     }
 
+    if let Some(path) = &ground_truth {
+        if !path.is_file() {
+            anyhow::bail!(
+                "ground truth file not found at {}",
+                path.display()
+            );
+        }
+        println!(
+            "  Ground truth: {} (strategy: {})",
+            path.display(),
+            match ground_truth_strategy {
+                GroundTruthStrategyOpt::Drop => "drop",
+                GroundTruthStrategyOpt::NoSync => "no-sync",
+                GroundTruthStrategyOpt::Bracket => "bracket",
+            },
+        );
+    }
+
     let opts = dpub_convert::ConvertOptions {
         audio: audio.into_format(bitrate_kbps),
         transcribe: transcribe_opts,
@@ -369,6 +448,8 @@ fn cmd_convert(
         auto_cover,
         rights,
         no_word_sync,
+        ground_truth,
+        boundary_strategy: ground_truth_strategy.into_strategy(),
     };
     let start = std::time::Instant::now();
     dpub_convert::convert_to_file(&book, output, &opts)
@@ -808,6 +889,8 @@ fn cmd_batch(
         auto_cover: true,
         rights: None,
         no_word_sync: false,
+        ground_truth: None,
+        boundary_strategy: dpub_convert::BoundaryStrategy::default(),
     };
     let start = std::time::Instant::now();
     let entries: Vec<BatchEntry> = books

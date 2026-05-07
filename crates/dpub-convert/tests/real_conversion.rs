@@ -123,6 +123,8 @@ fn opus_recompression_shrinks_real_book() {
             auto_cover: false,
             rights: None,
             no_word_sync: false,
+            ground_truth: None,
+            boundary_strategy: dpub_convert::BoundaryStrategy::default(),
         },
     )
     .expect("write opus");

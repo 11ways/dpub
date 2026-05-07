@@ -1,0 +1,22 @@
+[package]
+name = "dpub-align"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Align Whisper word-level timestamps to ground truth book text via Myers diff + fuzzy matching."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+similar = "3"
+strsim = "0.11"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+dpub-core = { path = "../dpub-core" }
