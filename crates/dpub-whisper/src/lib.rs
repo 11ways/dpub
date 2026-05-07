@@ -47,7 +47,7 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 /// One transcribed time-range with the text Whisper produced for it.
 ///
 /// Times are in seconds (whisper.cpp returns centiseconds; we convert).
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Segment {
     pub start_seconds: f64,
     pub end_seconds: f64,
@@ -65,7 +65,7 @@ pub struct Segment {
 /// the produced EPUB). Times are in seconds; whisper.cpp's token
 /// timestamps are notoriously approximate (~100–300 ms tolerance), so
 /// callers should not rely on word boundaries being lip-sync-accurate.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Word {
     pub start_seconds: f64,
     pub end_seconds: f64,
