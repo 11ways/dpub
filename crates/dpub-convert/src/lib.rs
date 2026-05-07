@@ -20,6 +20,7 @@ use rayon::prelude::*;
 
 mod error;
 mod text_cleanup;
+mod transcript_cache;
 pub use dpub_align::BoundaryStrategy;
 pub use error::{Error, Result};
 
@@ -776,7 +777,10 @@ fn inject_transcripts(
     // Load the GGML model exactly once for the whole book. Calling
     // `dpub_whisper::transcribe` per file would re-load 1.5 GB+ of
     // weights into Metal/CUDA buffers for every audio file (#10).
-    let transcriber = dpub_whisper::Transcriber::new(&whisper_opts)?;
+    // The wrapper layers an on-disk cache on top so repeat
+    // conversions of the same audio + model + language complete in
+    // seconds. Set `DPUB_NO_TRANSCRIPT_CACHE=1` to bypass.
+    let transcriber = transcript_cache::CachedTranscriber::new(&whisper_opts)?;
 
     // Read and split the ground truth file once, mapping section
     // index → owned section text. None when no ground truth is in use.
