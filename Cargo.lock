@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "dpub-audio"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "tempfile",
  "thiserror 1.0.69",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "dpub-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "dpub-convert"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "dpub-audio",
@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "dpub-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "dpub-util",
  "quick-xml",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "dpub-meta"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -426,11 +426,11 @@ dependencies = [
 
 [[package]]
 name = "dpub-util"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "dpub-validate"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "epub3-writer",
  "serde",
@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "dpub-whisper"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "rubato",
  "serde",
@@ -474,7 +474,7 @@ checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
 
 [[package]]
 name = "epub3-writer"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "dpub-util",
