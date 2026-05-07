@@ -5,4 +5,5 @@
 //! `epub3_writer::writers`, `dpub_convert`) which is a recipe for bug
 //! drift — fix one, forget the others.
 
+pub mod lang;
 pub mod xml;

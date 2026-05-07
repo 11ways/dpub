@@ -163,9 +163,63 @@ pub fn install_model(spec: &ModelSpec) -> Result<PathBuf> {
         spec.filename(),
         format_bytes(spec.bytes),
     );
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=MAX_ATTEMPTS {
+        if attempt > 1 {
+            eprintln!("  Retrying (attempt {attempt}/{MAX_ATTEMPTS}) ...");
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        match download_once(spec, &partial_path) {
+            Ok(hasher) => {
+                last_err = None;
+                // Verify SHA256 before promoting to final path.
+                let actual = hex(hasher.finalize().as_slice());
+                if actual != spec.sha256 {
+                    fs::remove_file(&partial_path).ok();
+                    anyhow::bail!(
+                        "SHA256 mismatch for {}: expected {}, got {}",
+                        spec.filename(),
+                        spec.sha256,
+                        actual,
+                    );
+                }
+                break;
+            }
+            Err(e) => {
+                eprintln!(); // newline after stalled progress bar
+                eprintln!("  Download interrupted: {e:#}");
+                fs::remove_file(&partial_path).ok();
+                last_err = Some(e);
+            }
+        }
+    }
+    if let Some(e) = last_err {
+        return Err(e).with_context(|| {
+            format!(
+                "downloading {} failed after {MAX_ATTEMPTS} attempts",
+                spec.url()
+            )
+        });
+    }
+
+    fs::rename(&partial_path, &final_path)
+        .with_context(|| format!("renaming {} → {}", partial_path.display(), final_path.display()))?;
+    eprintln!("Verified SHA256.");
+    eprintln!("Cached: {}", final_path.display());
+    Ok(final_path)
+}
+
+/// Single download attempt. Returns the SHA256 hasher on success so the
+/// caller can verify the hash. On I/O or network error the partial file
+/// is left on disk (the caller decides whether to retry or clean up).
+fn download_once(
+    spec: &ModelSpec,
+    partial_path: &Path,
+) -> Result<Sha256> {
     let agent = dpub_meta::agent();
     let mut hasher = Sha256::new();
-    let mut file = fs::File::create(&partial_path)
+    let mut file = fs::File::create(partial_path)
         .with_context(|| format!("creating {}", partial_path.display()))?;
     let mut last_tick = Instant::now();
     let started = Instant::now();
@@ -189,22 +243,7 @@ pub fn install_model(spec: &ModelSpec) -> Result<PathBuf> {
     eprintln!(); // newline after the in-place progress bar
     file.flush().ok();
     drop(file);
-
-    let actual = hex(hasher.finalize().as_slice());
-    if actual != spec.sha256 {
-        fs::remove_file(&partial_path).ok();
-        anyhow::bail!(
-            "SHA256 mismatch for {}: expected {}, got {}",
-            spec.filename(),
-            spec.sha256,
-            actual,
-        );
-    }
-    fs::rename(&partial_path, &final_path)
-        .with_context(|| format!("renaming {} → {}", partial_path.display(), final_path.display()))?;
-    eprintln!("Verified SHA256.");
-    eprintln!("Cached: {}", final_path.display());
-    Ok(final_path)
+    Ok(hasher)
 }
 
 /// Verify an existing file's SHA256 against `expected_hex` without

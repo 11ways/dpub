@@ -26,6 +26,7 @@ dpub-audio = { path = "../dpub-audio", version = "0.6.0" }
 dpub-core = { path = "../dpub-core", version = "0.6.0" }
 dpub-convert = { path = "../dpub-convert", version = "0.6.0" }
 dpub-meta = { path = "../dpub-meta", version = "0.6.0" }
+dpub-util = { path = "../dpub-util", version = "0.6.0" }
 dpub-validate = { path = "../dpub-validate", version = "0.6.0" }
 sha2 = { workspace = true }
 clap = { workspace = true }

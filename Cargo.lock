@@ -374,6 +374,7 @@ dependencies = [
  "dpub-convert",
  "dpub-core",
  "dpub-meta",
+ "dpub-util",
  "dpub-validate",
  "rayon",
  "serde",
@@ -418,6 +419,7 @@ dependencies = [
 name = "dpub-meta"
 version = "0.6.0"
 dependencies = [
+ "dpub-util",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

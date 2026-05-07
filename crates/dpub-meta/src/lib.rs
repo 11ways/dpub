@@ -32,16 +32,24 @@ pub use error::{Error, Result};
 const SEARCH_URL: &str = "https://openlibrary.org/search.json";
 const COVERS_URL: &str = "https://covers.openlibrary.org/b";
 const USER_AGENT_BASE: &str = "dpub";
-const TIMEOUT: Duration = Duration::from_secs(8);
+// covers.openlibrary.org occasionally takes ~20 s on the
+// CDN-redirect chain, especially for less-popular editions, so 8 s
+// was too tight in practice. 30 s leaves headroom without making a
+// totally-down API hang the convert pipeline.
+const TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_COVER_BYTES: usize = 4 * 1024 * 1024;
 
-/// Build a fresh `ureq::Agent` with dpub's standard configuration:
-/// 8-second timeout, identifying User-Agent. Callers that need a
-/// generic HTTP-download path (Whisper model fetch, etc.) can use
-/// this directly via [`download_to_writer`].
+/// Build a fresh `ureq::Agent` for large downloads (Whisper models).
+///
+/// Uses per-read/write timeouts instead of a total-request timeout so
+/// that multi-gigabyte downloads don't time out as long as data keeps
+/// flowing. The 60-second per-read timeout gives ample room for CDN
+/// hiccups while still failing promptly on a truly stalled connection.
 pub fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(60))
+        .timeout_connect(Duration::from_secs(30))
+        .timeout_read(Duration::from_secs(60))
+        .timeout_write(Duration::from_secs(30))
         .user_agent(&format!(
             "{USER_AGENT_BASE}/{} (+https://github.com/11ways/dpub)",
             env!("CARGO_PKG_VERSION")
@@ -146,7 +154,11 @@ fn try_isbn(agent: &ureq::Agent, hints: &LookupHints<'_>) -> Result<Option<Candi
         .query("limit", "5")
         .call()?
         .into_json()?;
-    Ok(pick(&resp, hints, "isbn"))
+    // ISBN uniquely identifies an edition, so trust the search result
+    // and skip language/author filters — Open Library's per-edition
+    // metadata can disagree with DAISY's `dc:language` (e.g. "dut" vs
+    // "nl") or list a translator instead of the original author.
+    Ok(pick_first_with_cover(&resp, "isbn"))
 }
 
 fn try_title_creator(agent: &ureq::Agent, hints: &LookupHints<'_>) -> Result<Option<Candidate>> {
@@ -158,25 +170,43 @@ fn try_title_creator(agent: &ureq::Agent, hints: &LookupHints<'_>) -> Result<Opt
         req = req.query("author", creator);
     }
     let resp: SearchResponse = req.call()?.into_json()?;
-    Ok(pick(&resp, hints, "title+author"))
+    Ok(pick_filtered(&resp, hints, "title+author"))
+}
+
+/// Pick the first hit with a cover, no filtering. Used when the search
+/// key (an ISBN) already disambiguates the edition.
+fn pick_first_with_cover(resp: &SearchResponse, by: &'static str) -> Option<Candidate> {
+    for doc in &resp.docs {
+        if let Some(cover_id) = doc.cover_i {
+            return Some(Candidate {
+                cover_id,
+                edition_key: doc.cover_edition_key.clone(),
+                title: doc.title.clone().unwrap_or_default(),
+                author: doc.author_name.first().cloned(),
+                by,
+            });
+        }
+    }
+    None
 }
 
 /// Pick the first hit whose language matches the hints (when given) and
-/// whose author overlaps the requested creator's last name. Returns
-/// `None` if no hit clears the bar.
-fn pick(resp: &SearchResponse, hints: &LookupHints<'_>, by: &'static str) -> Option<Candidate> {
-    let want_lang = hints.language.map(str::to_lowercase);
-    let want_lastname = hints
-        .creator
-        .map(last_name)
-        .map(str::to_lowercase);
+/// whose author overlaps the requested creator's last name. Used for
+/// title+author search, where false positives (popular English book
+/// outranking the actual translation we want) are a real risk.
+fn pick_filtered(
+    resp: &SearchResponse,
+    hints: &LookupHints<'_>,
+    by: &'static str,
+) -> Option<Candidate> {
+    let want_lastname = hints.creator.map(last_name).map(str::to_lowercase);
 
     for doc in &resp.docs {
         let Some(cover_id) = doc.cover_i else {
             continue;
         };
-        if let Some(lang) = &want_lang
-            && !doc.language.iter().any(|l| l.eq_ignore_ascii_case(lang))
+        if let Some(lang) = hints.language
+            && !language_matches(lang, &doc.language)
         {
             continue;
         }
@@ -197,6 +227,23 @@ fn pick(resp: &SearchResponse, hints: &LookupHints<'_>, by: &'static str) -> Opt
         });
     }
     None
+}
+
+/// True if `want` (typically ISO 639-1, the form DAISY 2.02 metadata
+/// uses) names the same language as any code in `doc_langs` (Open
+/// Library typically returns ISO 639-2/B, e.g. `"dut"` for Dutch).
+/// Treats 639-1 / 639-2/B / 639-2/T as equivalent via the shared
+/// normaliser in `dpub_util::lang`.
+fn language_matches(want: &str, doc_langs: &[String]) -> bool {
+    let Some(want_norm) = dpub_util::lang::iso639_to_part1(want) else {
+        // Unknown code — fall back to literal comparison.
+        return doc_langs
+            .iter()
+            .any(|l| l.eq_ignore_ascii_case(want.trim()));
+    };
+    doc_langs.iter().any(|l| {
+        dpub_util::lang::iso639_to_part1(l).is_some_and(|n| n == want_norm)
+    })
 }
 
 fn fetch_cover(agent: &ureq::Agent, candidate: &Candidate) -> Result<FetchedCover> {
@@ -337,7 +384,7 @@ mod tests {
             language: Some("nl"),
             identifier: None,
         };
-        assert!(pick(&resp, &hints, "test").is_none());
+        assert!(pick_filtered(&resp, &hints, "test").is_none());
     }
 
     #[test]
@@ -357,7 +404,7 @@ mod tests {
             language: Some("nl"),
             identifier: None,
         };
-        let got = pick(&resp, &hints, "test").expect("matched");
+        let got = pick_filtered(&resp, &hints, "test").expect("matched");
         assert_eq!(got.cover_id, 99);
         assert_eq!(got.edition_key.as_deref(), Some("OL12345M"));
     }
@@ -388,6 +435,66 @@ mod tests {
             language: Some("nl"),
             identifier: None,
         };
-        assert_eq!(pick(&resp, &hints, "test").map(|c| c.cover_id), Some(7));
+        assert_eq!(
+            pick_filtered(&resp, &hints, "test").map(|c| c.cover_id),
+            Some(7)
+        );
+    }
+
+    /// Regression: Open Library tags Dutch books `"dut"` (ISO 639-2/B)
+    /// but DAISY metadata uses `"nl"` (ISO 639-1). The naive
+    /// `eq_ignore_ascii_case` we used before silently dropped every
+    /// Dutch book that had a perfectly fine cover. Real-world miss:
+    /// "Het smelt" by Lize Spit (cover_i 13303384).
+    #[test]
+    fn pick_accepts_iso_639_2_b_against_iso_639_1() {
+        let resp = SearchResponse {
+            docs: vec![SearchDoc {
+                title: Some("Het smelt".into()),
+                cover_i: Some(13_303_384),
+                cover_edition_key: Some("OL46543686M".into()),
+                language: vec!["dut".into()],
+                author_name: vec!["Lize Spit".into()],
+            }],
+        };
+        let hints = LookupHints {
+            title: "HET SMELT",
+            creator: Some("Lize Spit"),
+            language: Some("nl"),
+            identifier: Some("13247A"), // not ISBN-shaped → forces title+author path
+        };
+        let got = pick_filtered(&resp, &hints, "test").expect("matched");
+        assert_eq!(got.cover_id, 13_303_384);
+    }
+
+    #[test]
+    fn language_matches_handles_iso_639_variants() {
+        assert!(language_matches("nl", &["dut".into()]));
+        assert!(language_matches("nl", &["nld".into()]));
+        assert!(language_matches("dut", &["nl".into()]));
+        assert!(language_matches("fr", &["fre".into()]));
+        assert!(language_matches("de", &["ger".into(), "eng".into()]));
+        assert!(language_matches("EN", &["eng".into()])); // case-insensitive
+        assert!(!language_matches("nl", &["eng".into()]));
+        assert!(!language_matches("nl", &[]));
+    }
+
+    /// ISBN uniquely identifies an edition; trust the search result.
+    /// Open Library sometimes lists a translator under `author_name`
+    /// or tags the language oddly, and we shouldn't reject the cover
+    /// over that.
+    #[test]
+    fn isbn_path_skips_language_and_author_filters() {
+        let resp = SearchResponse {
+            docs: vec![SearchDoc {
+                title: Some("Some Book".into()),
+                cover_i: Some(42),
+                cover_edition_key: None,
+                language: vec!["eng".into()], // doesn't match hint
+                author_name: vec!["Translator Name".into()], // doesn't match hint
+            }],
+        };
+        let got = pick_first_with_cover(&resp, "isbn").expect("matched");
+        assert_eq!(got.cover_id, 42);
     }
 }
