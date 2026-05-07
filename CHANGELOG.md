@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--auto-cover` for Dutch (and other) books no longer silently misses.** Open Library tags docs with ISO 639-2/B (e.g. `"dut"` for Dutch), while DAISY 2.02 metadata uses ISO 639-1 (`"nl"`); the previous literal `eq_ignore_ascii_case` dropped every plausible match. `dpub-meta` now treats 639-1, 639-2/B and 639-2/T as equivalent (`nl`/`dut`/`nld`, `fr`/`fre`/`fra`, `de`/`ger`/`deu`, etc.). Real-world miss this surfaced: "Het smelt" by Lize Spit. Regression test added.
+- **ISBN search hits are now trusted unconditionally.** When DAISY's `dc:identifier` is ISBN-shaped, the search-by-ISBN already disambiguates the edition, so the language and author filters on the result are noise — and would (incorrectly) reject the cover when Open Library lists a translator under `author_name`. Title+author search remains filtered.
+- **Open Library HTTP timeout raised from 8 s to 30 s.** `covers.openlibrary.org` redirects through archive.org and can take ~20 s on first hit for less-popular editions; 8 s caused spurious "lookup failed" misses.
+- **Whisper model download no longer times out on slow connections.** The HTTP agent used a 60-second total-request timeout, which was insufficient for the 1.5 GB `ggml-medium.bin` download. Now uses per-read timeouts (60 s idle) so downloads can take as long as needed as long as data keeps flowing. Additionally, downloads now retry up to 3 times on transient failures (CDN stalls, connection resets).
+
+### Changed
+
+- **Cover lookup now runs in the background** during conversion. The Open Library HTTP requests overlap with transcription and audio recompression instead of blocking the pipeline, so conversions with `--auto-cover` (now the default) no longer stall waiting for the network.
+
+### Added
+
+- **`--transcribe` auto-detects language from book metadata.** Passing `--transcribe` without a language code now reads `dc:language` from the DAISY NCC metadata and normalises it to ISO 639-1 for Whisper. Explicit `--transcribe nl` still works. Config file supports `"transcribe": true` for auto-detect or `"transcribe": "nl"` for a fixed default.
+- **Shared ISO 639 normaliser** (`dpub-util/lang`). Maps ISO 639-1, 639-2/B and 639-2/T codes to their canonical two-letter form. Used by both `dpub-meta` (cover lookup language filter) and `dpub-cli` (transcription auto-detect).
+- **Persistent config file** (`~/.config/dpub/config.json` on Unix, `%APPDATA%\dpub\config.json` on Windows). Lets users set defaults for `audio`, `bitrate`, `auto_cover`, `no_word_sync`, `rights`, `whisper_model`, `transcribe`, `validate`, `a11y`, `jobs`, and `log_level`. CLI flags always override config values.
+- **`dpub config` subcommand** — shows the config file path and contents. `--init` creates a starter file with all defaults; `--path` prints just the file path.
+- **`--auto-cover` is now on by default** for both `convert` and `batch`. Pass `--no-auto-cover` to opt out.
+
 ## [0.6.0] - 2026-05-07
 
 Word-level Media Overlay sync (karaoke-style highlight-along-with-audio in compatible reading systems) and a major first-run UX overhaul (`dpub doctor`, `dpub setup --whisper-model <size>`, auto-discovery, `scripts/build.sh`, optional `--install` for missing tools).

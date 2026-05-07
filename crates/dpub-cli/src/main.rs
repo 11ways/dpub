@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use dpub_core::{Book, NavItem};
 
+mod config;
 mod doctor;
 mod install;
 mod setup;
@@ -37,15 +38,16 @@ enum Command {
         #[arg(long)]
         a11y: bool,
         /// Audio handling: keep originals or recompress to Opus.
-        #[arg(long, value_enum, default_value_t = AudioOpt::Original)]
-        audio: AudioOpt,
+        #[arg(long, value_enum)]
+        audio: Option<AudioOpt>,
         /// Bitrate (kbit/s) when --audio=opus. Sensible range: 32–96 for speech.
-        #[arg(long, default_value_t = dpub_audio::DEFAULT_OPUS_BITRATE_KBPS)]
-        bitrate: u32,
-        /// Transcribe audio with local Whisper (e.g. `nl`, `en`). Requires
-        /// `--whisper-model`. The text gets injected into each section's
-        /// content document as a flat list of paragraphs.
         #[arg(long)]
+        bitrate: Option<u32>,
+        /// Transcribe audio with local Whisper. Pass a language code
+        /// (e.g. `--transcribe nl`) or omit the code to auto-detect
+        /// from the book's `dc:language` metadata. The text gets
+        /// injected into each section's content document.
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
         transcribe: Option<String>,
         /// Path to a `ggml-*.bin` Whisper model file. Required with
         /// `--transcribe`.
@@ -65,14 +67,14 @@ enum Command {
         #[arg(long)]
         no_word_sync: bool,
         /// Path to a JPEG or PNG image to embed as the EPUB cover.
-        #[arg(long, value_name = "PATH", conflicts_with = "auto_cover")]
+        #[arg(long, value_name = "PATH", conflicts_with = "no_auto_cover")]
         cover: Option<PathBuf>,
-        /// Best-effort cover lookup via Open Library using the book's
-        /// title, author, and identifier. Opt-in: it sends those bits
-        /// of metadata to a third party (Open Library). A miss is
-        /// silent — the book ships without a cover.
+        /// Disable the automatic cover lookup via Open Library.
+        /// By default dpub tries to fetch a cover using the book's
+        /// title, author, and identifier. Pass this flag to skip
+        /// the lookup (no network request is made).
         #[arg(long)]
-        auto_cover: bool,
+        no_auto_cover: bool,
         /// Free-text rights statement to stamp into the EPUB's
         /// `<dc:rights>` field. Overrides any rights string in the
         /// source DAISY metadata.
@@ -122,6 +124,20 @@ enum Command {
         #[arg(long, value_name = "SIZE")]
         whisper_model: Option<String>,
     },
+    /// Show or initialise the dpub configuration file.
+    ///
+    /// Without flags, prints the config file path and its contents (or an
+    /// example if no config file exists yet). Persistent defaults set here
+    /// are overridden by CLI flags.
+    Config {
+        /// Print only the config file path.
+        #[arg(long)]
+        path: bool,
+        /// Create a starter config file with documented defaults.
+        /// Errors if the file already exists.
+        #[arg(long)]
+        init: bool,
+    },
     /// Convert every DAISY 2.02 book under `<input>` to EPUB 3, in
     /// parallel. A "book" is any directory containing an `ncc.html`.
     /// Writes a JSON summary to stdout when finished. Per-book errors
@@ -135,14 +151,14 @@ enum Command {
         output: PathBuf,
         /// Number of conversions to run in parallel. `0` (default) lets
         /// rayon pick (typically the CPU count).
-        #[arg(short, long, default_value_t = 0)]
-        jobs: usize,
+        #[arg(short, long)]
+        jobs: Option<usize>,
         /// Audio handling: keep originals or recompress to Opus.
-        #[arg(long, value_enum, default_value_t = AudioOpt::Original)]
-        audio: AudioOpt,
+        #[arg(long, value_enum)]
+        audio: Option<AudioOpt>,
         /// Bitrate (kbit/s) when --audio=opus. Sensible range: 32–96 for speech.
-        #[arg(long, default_value_t = dpub_audio::DEFAULT_OPUS_BITRATE_KBPS)]
-        bitrate: u32,
+        #[arg(long)]
+        bitrate: Option<u32>,
     },
 }
 
@@ -164,10 +180,18 @@ impl AudioOpt {
 }
 
 fn main() -> Result<()> {
+    // Load config early so we can use log_level before tracing init.
+    let cfg = config::load();
+
+    let default_level = cfg
+        .log_level
+        .as_deref()
+        .unwrap_or("info")
+        .to_owned();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&default_level)),
         )
         .with_target(false)
         .compact()
@@ -188,34 +212,63 @@ fn main() -> Result<()> {
             no_text_cleanup,
             no_word_sync,
             cover,
-            auto_cover,
+            no_auto_cover,
             rights,
-        } => cmd_convert(
-            &ncc,
-            &output,
-            validate,
-            a11y,
-            audio,
-            bitrate,
-            transcribe,
-            whisper_model,
-            no_text_cleanup,
-            no_word_sync,
-            cover,
-            auto_cover,
-            rights,
-        ),
+        } => {
+            let audio = audio.unwrap_or_else(|| parse_audio_opt(&cfg));
+            let bitrate = bitrate.unwrap_or_else(|| {
+                cfg.bitrate.unwrap_or(dpub_audio::DEFAULT_OPUS_BITRATE_KBPS)
+            });
+            let validate = validate || cfg.validate.unwrap_or(false);
+            let a11y = a11y || cfg.a11y.unwrap_or(false);
+            let no_word_sync = no_word_sync || cfg.no_word_sync.unwrap_or(false);
+            let auto_cover = if no_auto_cover {
+                false
+            } else {
+                cfg.auto_cover.unwrap_or(true)
+            };
+            let rights = rights.or_else(|| cfg.rights.clone());
+            let whisper_model = whisper_model.or_else(|| cfg.whisper_model.clone());
+            // Merge transcribe: CLI flag > config > none.
+            // "" (empty) = auto-detect language from book metadata.
+            let transcribe = transcribe.or_else(|| match &cfg.transcribe {
+                Some(config::TranscribeSetting::Auto(true)) => Some(String::new()),
+                Some(config::TranscribeSetting::Language(lang)) => Some(lang.clone()),
+                _ => None,
+            });
+            cmd_convert(
+                &ncc, &output, validate, a11y, audio, bitrate, transcribe,
+                whisper_model, no_text_cleanup, no_word_sync, cover,
+                auto_cover, rights,
+            )
+        }
         Command::Validate { epub, json } => cmd_validate(&epub, json),
         Command::A11y { epub, json } => cmd_a11y(&epub, json),
         Command::Doctor { json, install, yes } => cmd_doctor(json, install, yes),
         Command::Setup { whisper_model } => cmd_setup(whisper_model.as_deref()),
+        Command::Config { path, init } => cmd_config(path, init),
         Command::Batch {
             input,
             output,
             jobs,
             audio,
             bitrate,
-        } => cmd_batch(&input, &output, jobs, audio, bitrate),
+        } => {
+            let audio = audio.unwrap_or_else(|| parse_audio_opt(&cfg));
+            let bitrate = bitrate.unwrap_or_else(|| {
+                cfg.bitrate.unwrap_or(dpub_audio::DEFAULT_OPUS_BITRATE_KBPS)
+            });
+            let jobs = jobs.unwrap_or_else(|| cfg.jobs.unwrap_or(0));
+            cmd_batch(&input, &output, jobs, audio, bitrate)
+        }
+    }
+}
+
+/// Parse the `audio` field from config, falling back to `Original`.
+fn parse_audio_opt(cfg: &config::DpubConfig) -> AudioOpt {
+    match cfg.audio.as_deref() {
+        Some("opus") => AudioOpt::Opus,
+        _ => AudioOpt::Original,
     }
 }
 
@@ -255,36 +308,37 @@ fn cmd_convert(
     }
 
     let transcribe_opts = match (transcribe, whisper_model) {
-        (Some(language), Some(model_path)) => {
-            if !model_path.is_file() {
-                anyhow::bail!(
-                    "Whisper model not found at {} (run `dpub setup --whisper-model medium` to download one)",
-                    model_path.display()
-                );
-            }
-            println!(
-                "  Transcribe: lang={language} model={}",
-                model_path.display()
-            );
-            Some(dpub_convert::TranscribeOptions {
-                model_path,
-                language,
-            })
-        }
-        (Some(language), None) => {
-            // Auto-discover: pick the most-recently-modified ggml-*.bin
-            // in dpub's per-user cache. If none, prompt on TTY (B.1)
-            // or fail with a hint.
-            let Some(model_path) = resolve_or_prompt_for_model()? else {
-                anyhow::bail!(
-                    "no Whisper model found in {}. \
-                     Run `dpub setup --whisper-model medium` to download one, \
-                     or pass `--whisper-model <path>` directly.",
-                    setup::cache_dir().display(),
-                );
+        (Some(language), model_path) => {
+            // Resolve language: empty string = auto-detect from book metadata.
+            let language = if language.is_empty() {
+                resolve_transcribe_language(&book)?
+            } else {
+                language
+            };
+            let model_path = if let Some(p) = model_path {
+                if !p.is_file() {
+                    anyhow::bail!(
+                        "Whisper model not found at {} (run `dpub setup --whisper-model medium` to download one)",
+                        p.display()
+                    );
+                }
+                p
+            } else {
+                // Auto-discover: pick the most-recently-modified ggml-*.bin
+                // in dpub's per-user cache. If none, prompt on TTY (B.1)
+                // or fail with a hint.
+                let Some(p) = resolve_or_prompt_for_model()? else {
+                    anyhow::bail!(
+                        "no Whisper model found in {}. \
+                         Run `dpub setup --whisper-model medium` to download one, \
+                         or pass `--whisper-model <path>` directly.",
+                        setup::cache_dir().display(),
+                    );
+                };
+                p
             };
             println!(
-                "  Transcribe: lang={language} model={} (auto-discovered)",
+                "  Transcribe: lang={language} model={}",
                 model_path.display()
             );
             Some(dpub_convert::TranscribeOptions {
@@ -383,6 +437,22 @@ fn cmd_a11y(epub: &std::path::Path, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Resolve the transcription language from the book's `dc:language`
+/// metadata. Normalises ISO 639-2 codes (e.g. `"dut"`) to ISO 639-1
+/// (e.g. `"nl"`) which is what Whisper expects.
+fn resolve_transcribe_language(book: &Book) -> Result<String> {
+    let raw = book
+        .metadata()
+        .language
+        .as_deref()
+        .context("cannot auto-detect transcription language: the book has no dc:language metadata. Pass an explicit language code, e.g. --transcribe nl")?;
+    dpub_util::lang::iso639_to_part1(raw)
+        .map(String::from)
+        .with_context(|| format!(
+            "cannot auto-detect transcription language: dc:language \"{raw}\" is not a recognised ISO 639 code. Pass an explicit language code, e.g. --transcribe nl"
+        ))
+}
+
 /// Look for a Whisper model the user already downloaded via
 /// `dpub setup`. Returns `Some(path)` if a cached model exists,
 /// `None` otherwise. On a TTY with no cached model, prompts the
@@ -468,6 +538,50 @@ fn cmd_setup(whisper_model: Option<&str>) -> Result<()> {
     };
     let path = setup::install_model(spec)?;
     println!("Default model for `dpub convert --transcribe`: {}", path.display());
+    Ok(())
+}
+
+fn cmd_config(path_only: bool, init: bool) -> Result<()> {
+    let path = config::config_path();
+    if path_only {
+        println!("{}", path.display());
+        return Ok(());
+    }
+    if init {
+        if path.exists() {
+            anyhow::bail!(
+                "config file already exists at {}. Edit it directly or delete it first.",
+                path.display(),
+            );
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        std::fs::write(&path, config::example_json())
+            .with_context(|| format!("writing {}", path.display()))?;
+        println!("Created {}", path.display());
+        return Ok(());
+    }
+    // Default: show path + contents or example.
+    println!("Config file: {}", path.display());
+    println!();
+    if path.is_file() {
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        print!("{contents}");
+        if !contents.ends_with('\n') {
+            println!();
+        }
+    } else {
+        println!("No config file found. Create one with:");
+        println!();
+        println!("  dpub config --init");
+        println!();
+        println!("Or create {} manually:", path.display());
+        println!();
+        println!("{}", config::example_json());
+    }
     Ok(())
 }
 
@@ -691,7 +805,7 @@ fn cmd_batch(
         transcribe: None,
         raw_transcript_segments: false,
         cover: None,
-        auto_cover: false,
+        auto_cover: true,
         rights: None,
         no_word_sync: false,
     };

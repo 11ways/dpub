@@ -584,10 +584,21 @@ pub struct ConvertOptions {
 pub fn convert_to_file(book: &Book, output: &Path, opts: &ConvertOptions) -> Result<()> {
     let mut publication = convert(book)?;
 
+    // Kick off the cover lookup on a background thread so it overlaps
+    // with transcription and audio recompression. The lookup only needs
+    // metadata (available now) and the result is just bytes we slot in
+    // before the ZIP write.
+    let cover_handle = if opts.cover.is_some() {
+        None // explicit cover — no network lookup needed
+    } else if opts.auto_cover {
+        let metadata = book.metadata().clone();
+        Some(std::thread::spawn(move || auto_lookup_cover_from_meta(&metadata)))
+    } else {
+        None
+    };
+
     if let Some(cover_path) = &opts.cover {
         publication.cover = Some(load_cover_image(cover_path)?);
-    } else if opts.auto_cover {
-        publication.cover = auto_lookup_cover(book);
     }
 
     if let Some(rights) = &opts.rights {
@@ -615,6 +626,13 @@ pub fn convert_to_file(book: &Book, output: &Path, opts: &ConvertOptions) -> Res
             Some(recompress_audio_to_opus(&mut publication, bitrate_kbps)?)
         }
     };
+
+    // Join the cover thread before writing the ZIP.
+    if let Some(handle) = cover_handle {
+        if let Ok(cover) = handle.join() {
+            publication.cover = cover;
+        }
+    }
 
     if let Some(parent) = output.parent()
         && !parent.as_os_str().is_empty()
@@ -653,13 +671,15 @@ fn load_cover_image(path: &Path) -> Result<epub3_writer::CoverImage> {
     })
 }
 
-/// Best-effort cover lookup against Open Library. Logs a single line
-/// describing the outcome — successful match, miss, or transport
+/// Best-effort cover lookup against Open Library. Takes owned
+/// [`Metadata`] so it can run on a background thread. Logs a single
+/// line describing the outcome — successful match, miss, or transport
 /// error — and returns `None` for everything except a successful
 /// match. Network errors are deliberately swallowed: `--auto-cover`
 /// is best-effort and a missing cover is normal for older DAISY books.
-fn auto_lookup_cover(book: &Book) -> Option<epub3_writer::CoverImage> {
-    let m = book.metadata();
+fn auto_lookup_cover_from_meta(
+    m: &dpub_core::Metadata,
+) -> Option<epub3_writer::CoverImage> {
     let Some(title) = m.title.as_deref() else {
         eprintln!("--auto-cover: no title in metadata, skipping");
         return None;
