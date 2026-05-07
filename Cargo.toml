@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/dpub-align",
     "crates/dpub-audio",
     "crates/dpub-core",
     "crates/dpub-cli",

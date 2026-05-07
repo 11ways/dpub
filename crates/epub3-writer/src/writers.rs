@@ -314,6 +314,11 @@ pub fn write_overlay_smil(overlay: &MediaOverlay) -> String {
 }
 
 fn write_overlay_seq(s: &mut String, seq: &OverlaySeq, indent: usize) {
+    // EPUBCheck rejects empty <seq> elements (RSC-005 "element seq
+    // incomplete"). Recursively empty branches are also dropped.
+    if !seq_has_par_descendant(seq) {
+        return;
+    }
     let pad = " ".repeat(indent);
     let textref = seq
         .textref
@@ -328,6 +333,16 @@ fn write_overlay_seq(s: &mut String, seq: &OverlaySeq, indent: usize) {
         }
     }
     let _ = write!(s, "{pad}</seq>\n");
+}
+
+/// Recursively check whether a `<seq>` contains at least one `<par>`
+/// somewhere in its tree. Used to skip empty branches that would fail
+/// EPUBCheck.
+fn seq_has_par_descendant(seq: &OverlaySeq) -> bool {
+    seq.children.iter().any(|c| match c {
+        OverlayItem::Par(_) => true,
+        OverlayItem::Seq(inner) => seq_has_par_descendant(inner),
+    })
 }
 
 fn write_overlay_par(s: &mut String, par: &OverlayPar, indent: usize) {

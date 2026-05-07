@@ -45,6 +45,10 @@ pub struct DpubConfig {
     pub jobs: Option<usize>,
     /// Default log level (`"error"`, `"warn"`, `"info"`, `"debug"`, `"trace"`).
     pub log_level: Option<String>,
+    /// Default ground truth file path.
+    pub ground_truth: Option<PathBuf>,
+    /// Default ground truth strategy: `"drop"`, `"no-sync"`, or `"bracket"`.
+    pub ground_truth_strategy: Option<String>,
 }
 
 /// Return the platform-appropriate config directory for dpub.
@@ -106,7 +110,9 @@ pub fn example_json() -> &'static str {
   "validate": false,
   "a11y": false,
   "jobs": 0,
-  "log_level": "info"
+  "log_level": "info",
+  "ground_truth": null,
+  "ground_truth_strategy": "no-sync"
 }"#
 }
 

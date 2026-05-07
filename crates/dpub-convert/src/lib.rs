@@ -20,6 +20,7 @@ use rayon::prelude::*;
 
 mod error;
 mod text_cleanup;
+pub use dpub_align::BoundaryStrategy;
 pub use error::{Error, Result};
 
 /// Convert a parsed DAISY 2.02 [`Book`] into an EPUB 3 [`Publication`].
@@ -205,8 +206,17 @@ fn build_sections(
                 .strip_suffix(".smil")
                 .unwrap_or(&section_ref.src)
                 .to_owned();
+            // XML Names (and OPF manifest IDs are XML Names) cannot
+            // start with a digit. DAISY filenames often do
+            // (`001_…`, `002_…`), so prefix those stems with `s-`.
             let id = if stem.is_empty() {
                 format!("section-{:03}", idx + 1)
+            } else if stem
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+            {
+                format!("s-{stem}")
             } else {
                 stem.clone()
             };
@@ -571,6 +581,15 @@ pub struct ConvertOptions {
     /// highlight-along-with-audio. Set this to keep SMIL files
     /// small at the cost of a coarser reading experience.
     pub no_word_sync: bool,
+    /// Optional path to a ground truth text file (plain text or
+    /// markdown). When set together with `transcribe`, Whisper still
+    /// runs to produce timestamps but the EPUB ships with the real
+    /// book text aligned word-by-word against Whisper's word stream.
+    pub ground_truth: Option<std::path::PathBuf>,
+    /// How to handle ground-truth-only words (book content the
+    /// narrator skipped — colophon, index, etc.). Default
+    /// `BoundaryStrategy::NoSync`.
+    pub boundary_strategy: dpub_align::BoundaryStrategy,
 }
 
 /// Convert and write a DAISY 2.02 publication to an EPUB 3 file in one call.
@@ -615,7 +634,11 @@ pub fn convert_to_file(book: &Book, output: &Path, opts: &ConvertOptions) -> Res
             transcribe,
             opts.raw_transcript_segments,
             opts.no_word_sync,
+            opts.ground_truth.as_deref(),
+            opts.boundary_strategy,
         )?;
+    } else if opts.ground_truth.is_some() {
+        return Err(Error::GroundTruthWithoutTranscribe);
     }
 
     // Recompression has to happen *before* the ZIP write because the writer
@@ -736,12 +759,15 @@ fn sniff_image_format(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
 /// When `raw_segments` is `true`, the per-segment Whisper output is emitted
 /// directly (one `<p>` per ~10–30 s segment); the default `false` runs
 /// `text_cleanup::merge_into_paragraphs` to produce prose-shaped output.
+#[allow(clippy::too_many_arguments)]
 fn inject_transcripts(
     book: &Book,
     publication: &mut Publication,
     opts: &TranscribeOptions,
     raw_segments: bool,
     no_word_sync: bool,
+    ground_truth_path: Option<&std::path::Path>,
+    boundary_strategy: dpub_align::BoundaryStrategy,
 ) -> Result<()> {
     let whisper_opts = dpub_whisper::TranscribeOptions {
         model_path: opts.model_path.clone(),
@@ -751,6 +777,40 @@ fn inject_transcripts(
     // `dpub_whisper::transcribe` per file would re-load 1.5 GB+ of
     // weights into Metal/CUDA buffers for every audio file (#10).
     let transcriber = dpub_whisper::Transcriber::new(&whisper_opts)?;
+
+    // Read and split the ground truth file once, mapping section
+    // index → owned section text. None when no ground truth is in use.
+    let ground_truth_by_section: Option<std::collections::HashMap<usize, String>> =
+        if let Some(path) = ground_truth_path {
+            let text = std::fs::read_to_string(path).map_err(|source| Error::GroundTruthIo {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            // Use the master.smil section titles (one per section,
+            // 1:1 with publication.sections) so the alignment maps
+            // directly onto section indices without an extra lookup.
+            let headings: Vec<(&str, usize)> = book
+                .master
+                .references
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (r.title.as_str(), i))
+                .collect();
+            let sections = dpub_align::split_into_sections(&text, &headings);
+            tracing::info!(
+                "ground truth: matched {}/{} sections",
+                sections.len(),
+                headings.len()
+            );
+            Some(
+                sections
+                    .into_iter()
+                    .map(|s| (s.ncc_index, s.text))
+                    .collect(),
+            )
+        } else {
+            None
+        };
 
     // Cache: file basename → segments. Reused across sections that share an
     // audio file.
@@ -796,11 +856,33 @@ fn inject_transcripts(
         let new_paragraphs = if raw_segments {
             render_raw_paragraphs(idx, &section_segments)
         } else {
-            let cleaned = text_cleanup::merge_into_paragraphs(
-                &section_segments,
-                &section_audio_srcs,
-                &text_cleanup::CleanupOpts::default(),
-            );
+            // Choose the cleanup path: ground truth alignment when
+            // available for this section, else heuristic merging of
+            // raw Whisper output.
+            let cleaned = match ground_truth_by_section
+                .as_ref()
+                .and_then(|m| m.get(&idx))
+            {
+                Some(gt_text) => align_with_ground_truth(
+                    idx,
+                    &section_segments,
+                    &section_audio_srcs,
+                    gt_text,
+                    boundary_strategy,
+                )
+                .unwrap_or_else(|| {
+                    text_cleanup::merge_into_paragraphs(
+                        &section_segments,
+                        &section_audio_srcs,
+                        &text_cleanup::CleanupOpts::default(),
+                    )
+                }),
+                None => text_cleanup::merge_into_paragraphs(
+                    &section_segments,
+                    &section_audio_srcs,
+                    &text_cleanup::CleanupOpts::default(),
+                ),
+            };
             let html = render_cleaned_paragraphs(idx, &cleaned);
             // Word-level Media Overlay sync: rebuild this section's
             // overlay from the cleaned paragraphs, replacing the
@@ -816,7 +898,15 @@ fn inject_transcripts(
                     idx,
                     &cleaned,
                 );
-                overlay.root = new_root;
+                // Only swap in the rebuilt tree if it actually has
+                // synced words. If every word in this section ended
+                // up filtered out (all-Unsynced ground truth, or all
+                // zero-duration interpolations), keep the existing
+                // heading-level overlay shell so we don't ship an
+                // empty SMIL body.
+                if has_par_descendant(&new_root) {
+                    overlay.root = new_root;
+                }
             }
             html
         };
@@ -826,6 +916,101 @@ fn inject_transcripts(
     }
 
     Ok(())
+}
+
+/// Run ground truth alignment for one section. Builds a flat
+/// chronological Whisper word stream from `segments` (paired with
+/// per-segment audio basenames), splits the result into
+/// `text_cleanup::Paragraph` values that drop into the existing
+/// pipeline. Returns `None` if alignment was not possible (no audio,
+/// no words) so the caller falls back to heuristic cleanup.
+fn align_with_ground_truth(
+    section_idx: usize,
+    segments: &[dpub_whisper::Segment],
+    audio_srcs: &[String],
+    ground_truth: &str,
+    boundary_strategy: dpub_align::BoundaryStrategy,
+) -> Option<Vec<text_cleanup::Paragraph>> {
+    if segments.is_empty() || ground_truth.trim().is_empty() {
+        return None;
+    }
+    // Flatten all Whisper words from all segments into one stream.
+    let mut whisper_words: Vec<dpub_align::WordTiming> = Vec::new();
+    for seg in segments {
+        for w in &seg.words {
+            whisper_words.push(dpub_align::WordTiming {
+                start_seconds: w.start_seconds,
+                end_seconds: w.end_seconds,
+                text: w.text.clone(),
+            });
+        }
+    }
+    if whisper_words.is_empty() {
+        return None;
+    }
+    // The aligner doesn't know about per-word audio sources — when a
+    // section spans multiple audio files we use the first file's name
+    // for all paragraphs. Splitting paragraphs at audio boundaries is
+    // possible but rare for this input shape (one section ≈ one
+    // audio file in DAISY 2.02), so we punt for v1.
+    let primary_audio = audio_srcs.first().cloned().unwrap_or_default();
+
+    let result = dpub_align::align_section(
+        &whisper_words,
+        ground_truth,
+        &primary_audio,
+        boundary_strategy,
+    )
+    .ok()?;
+
+    for event in &result.trim_log {
+        let label = match event.kind {
+            dpub_align::TrimKind::LeadingWhisper => "leading whisper-only",
+            dpub_align::TrimKind::TrailingWhisper => "trailing whisper-only",
+            dpub_align::TrimKind::LeadingGroundTruth => "leading ground-truth-only",
+            dpub_align::TrimKind::TrailingGroundTruth => "trailing ground-truth-only",
+        };
+        tracing::info!(
+            "align: section {section_idx} trimmed {} {label} words: \"{}\"",
+            event.word_count,
+            event.preview,
+        );
+    }
+
+    let paragraphs: Vec<text_cleanup::Paragraph> = result
+        .paragraphs
+        .into_iter()
+        .map(|ap| text_cleanup::Paragraph {
+            start_seconds: ap.start_seconds,
+            end_seconds: ap.end_seconds,
+            text: ap.text,
+            audio_src: ap.audio_src,
+            words: ap
+                .words
+                .into_iter()
+                // Unsynced words keep their text in the XHTML span
+                // (so the text is readable) but carry start==end==0
+                // so build_word_overlay_seq omits them from SMIL —
+                // the colophon is visible without a fake audio sync.
+                .map(|w| dpub_whisper::Word {
+                    start_seconds: w.start_seconds,
+                    end_seconds: w.end_seconds,
+                    text: w.text,
+                })
+                .collect(),
+        })
+        .collect();
+    Some(paragraphs)
+}
+
+/// Returns true if the seq contains at least one `<par>` somewhere
+/// in its subtree. Mirrors the same check in the SMIL writer; used
+/// here to decide whether to replace the heading-level overlay.
+fn has_par_descendant(seq: &OverlaySeq) -> bool {
+    seq.children.iter().any(|c| match c {
+        OverlayItem::Par(_) => true,
+        OverlayItem::Seq(inner) => has_par_descendant(inner),
+    })
 }
 
 fn render_raw_paragraphs(section_idx: usize, segments: &[dpub_whisper::Segment]) -> String {
@@ -870,6 +1055,23 @@ fn build_word_overlay_seq(
 
         let mut word_children: Vec<OverlayItem> = Vec::with_capacity(para.words.len());
         for (word_idx, word) in para.words.iter().enumerate() {
+            // Skip "unsynced" words: explicit sentinel
+            // (start==end==0) for ground-truth-only material under
+            // NoSync strategy, and also any zero-duration word that
+            // slipped through interpolation (clipBegin == clipEnd
+            // would fail EPUBCheck MED-009). The XHTML span is still
+            // emitted so the text remains readable.
+            //
+            // Use the same millisecond rounding the SMIL writer
+            // applies — two distinct f64 timestamps can round to the
+            // same `H:MM:SS.fff` string and trip MED-009.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let start_ms = (word.start_seconds * 1000.0).round() as i64;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let end_ms = (word.end_seconds * 1000.0).round() as i64;
+            if end_ms <= start_ms {
+                continue;
+            }
             let word_id = format!("w-{section_idx:03}-{para_idx:03}-{word_idx:03}");
             word_children.push(OverlayItem::Par(OverlayPar {
                 id: Some(word_id.clone()),
@@ -878,6 +1080,12 @@ fn build_word_overlay_seq(
                 clip_begin_seconds: word.start_seconds,
                 clip_end_seconds: word.end_seconds,
             }));
+        }
+        // Empty paragraph-level <seq> elements fail EPUBCheck RSC-005
+        // ("element seq incomplete"). Skip the entire paragraph
+        // wrapper when no synced words remain.
+        if word_children.is_empty() {
+            continue;
         }
         top_children.push(OverlayItem::Seq(OverlaySeq {
             textref: Some(para_textref),
@@ -1212,6 +1420,109 @@ mod tests {
             inner.textref.as_deref(),
             Some("../content/x.xhtml#tx-000-001")
         );
+    }
+
+    #[test]
+    fn build_word_overlay_seq_drops_words_collapsing_to_same_millisecond() {
+        // f64 timestamps that round to the same millisecond when the
+        // SMIL writer formats them as H:MM:SS.fff would emit
+        // clipBegin == clipEnd, tripping EPUBCheck MED-009. The
+        // builder must mirror that rounding to filter such words.
+        let para = text_cleanup::Paragraph {
+            start_seconds: 0.0,
+            end_seconds: 1.0,
+            text: "ok bad ok".into(),
+            words: vec![
+                dpub_whisper::Word {
+                    start_seconds: 36.5302,
+                    end_seconds: 36.5304, // both round to 36.530
+                    text: "bad".into(),
+                },
+                dpub_whisper::Word {
+                    start_seconds: 36.6,
+                    end_seconds: 36.8,
+                    text: "ok".into(),
+                },
+            ],
+            audio_src: "a.mp3".into(),
+        };
+        let root = build_word_overlay_seq("content/x.xhtml", 0, &[para]);
+        let OverlayItem::Seq(inner) = &root.children[0] else {
+            panic!("expected paragraph seq");
+        };
+        // Only the second word survives.
+        assert_eq!(inner.children.len(), 1);
+    }
+
+    #[test]
+    fn build_word_overlay_seq_drops_zero_duration_words() {
+        // Words with start == end (interpolation collapsed to a
+        // zero-width slot) would produce SMIL `clipBegin == clipEnd`,
+        // which EPUBCheck rejects (MED-009).
+        let para = text_cleanup::Paragraph {
+            start_seconds: 0.0,
+            end_seconds: 1.0,
+            text: "ok bad ok".into(),
+            words: vec![
+                dpub_whisper::Word {
+                    start_seconds: 0.0,
+                    end_seconds: 0.5,
+                    text: "ok".into(),
+                },
+                dpub_whisper::Word {
+                    // zero-duration: must be filtered.
+                    start_seconds: 0.5,
+                    end_seconds: 0.5,
+                    text: "bad".into(),
+                },
+                dpub_whisper::Word {
+                    start_seconds: 0.5,
+                    end_seconds: 1.0,
+                    text: "ok".into(),
+                },
+            ],
+            audio_src: "a.mp3".into(),
+        };
+        let root = build_word_overlay_seq("content/x.xhtml", 0, &[para]);
+        let OverlayItem::Seq(inner) = &root.children[0] else {
+            panic!("expected paragraph seq");
+        };
+        // Two pars survive (the middle one was zero-duration).
+        assert_eq!(inner.children.len(), 2);
+    }
+
+    #[test]
+    fn build_word_overlay_seq_drops_paragraph_with_only_unsynced_words() {
+        // Every word zero-duration → empty paragraph seq → must be
+        // skipped entirely so the SMIL writer doesn't emit an empty
+        // <seq> (EPUBCheck RSC-005).
+        let p_all_unsynced = text_cleanup::Paragraph {
+            start_seconds: 0.0,
+            end_seconds: 0.0,
+            text: "colophon".into(),
+            words: vec![
+                dpub_whisper::Word {
+                    start_seconds: 0.0,
+                    end_seconds: 0.0,
+                    text: "colophon".into(),
+                },
+            ],
+            audio_src: "a.mp3".into(),
+        };
+        let p_real = text_cleanup::Paragraph {
+            start_seconds: 1.0,
+            end_seconds: 2.0,
+            text: "Real".into(),
+            words: vec![dpub_whisper::Word {
+                start_seconds: 1.0,
+                end_seconds: 2.0,
+                text: "Real".into(),
+            }],
+            audio_src: "a.mp3".into(),
+        };
+        let root = build_word_overlay_seq("content/x.xhtml", 0, &[p_all_unsynced, p_real]);
+        // The unsynced paragraph wrapper was dropped.
+        assert_eq!(root.children.len(), 1);
     }
 
     #[test]

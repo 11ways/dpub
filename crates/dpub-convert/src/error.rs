@@ -23,6 +23,16 @@ pub enum Error {
 
     #[error("unsupported cover image at {path}: only JPEG and PNG are accepted")]
     UnsupportedCoverImage { path: PathBuf },
+
+    #[error("--ground-truth requires --transcribe (Whisper provides timestamps)")]
+    GroundTruthWithoutTranscribe,
+
+    #[error("ground truth file at {path} could not be read: {source}")]
+    GroundTruthIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
