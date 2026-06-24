@@ -97,10 +97,15 @@ fn handle_boundary_region(
 
     // Whisper-only words in a boundary region are always discarded
     // (audiobook preamble / outro). Their time is *not* redistributed.
+    // Replace ops in a boundary region also discard their Whisper
+    // word — outside the anchor region we can't trust positional
+    // pairing, so the safer choice is to drop both halves instead of
+    // binding a real audio time to a GT word that might never have
+    // been read.
     let whisper_only: Vec<usize> = region
         .iter()
         .filter_map(|c| match c.op {
-            Op::Delete { whisper_idx } => Some(whisper_idx),
+            Op::Delete { whisper_idx } | Op::Replace { whisper_idx, .. } => Some(whisper_idx),
             _ => None,
         })
         .collect();
@@ -116,11 +121,13 @@ fn handle_boundary_region(
         });
     }
 
-    // Ground-truth-only words: collect, then apply strategy.
+    // Ground-truth-only words: collect, then apply strategy. Replace
+    // contributes its GT side here for the same reason: outside the
+    // anchor region, the positional pairing isn't load-bearing.
     let gt_only: Vec<usize> = region
         .iter()
         .filter_map(|c| match c.op {
-            Op::Insert { gt_idx } => Some(gt_idx),
+            Op::Insert { gt_idx } | Op::Replace { gt_idx, .. } => Some(gt_idx),
             _ => None,
         })
         .collect();
@@ -215,9 +222,10 @@ fn handle_boundary_region(
     }
 }
 
-/// Walk the core region: Equal/Fuzzy copy timestamps; Delete is
-/// discarded (audio time is reclaimed by neighbours via interpolation
-/// of any adjacent Inserts); Insert interpolates from neighbours.
+/// Walk the core region: Equal/Fuzzy/Replace copy timestamps from
+/// Whisper to the GT word at the same position; Delete is discarded
+/// (audio time is reclaimed by neighbours via interpolation of any
+/// adjacent Inserts); Insert interpolates from neighbours.
 fn transfer_core(
     region: &[&ClassifiedOp],
     whisper: &[WordTiming],
@@ -244,6 +252,22 @@ fn transfer_core(
                     start_seconds: w.start_seconds,
                     end_seconds: w.end_seconds,
                     confidence: Confidence::Fuzzy,
+                });
+                i += 1;
+            }
+            Op::Replace { whisper_idx, gt_idx, .. } => {
+                // Position-paired with low textual similarity, but
+                // they're at the same time slot — copy Whisper's
+                // span verbatim. This is what makes the karaoke
+                // highlight track audio for "2024" → spoken Dutch
+                // form, name swaps, and other near-misses below the
+                // fuzzy threshold.
+                let w = &whisper[whisper_idx];
+                aligned.push(AlignedWord {
+                    text: ground_truth[gt_idx].text.clone(),
+                    start_seconds: w.start_seconds,
+                    end_seconds: w.end_seconds,
+                    confidence: Confidence::Replaced,
                 });
                 i += 1;
             }
@@ -572,6 +596,29 @@ mod tests {
         assert_eq!(aligned[0].text, "antwerpen");
         assert_eq!(aligned[0].confidence, Confidence::Fuzzy);
         assert_eq!(aligned[0].start_seconds, 1.0);
+    }
+
+    #[test]
+    fn replace_op_transfers_whisper_timestamp_to_gt_word() {
+        // Whisper transcribed "kavija" but the book has "Cavia".
+        // Jaro-Winkler is below 0.85 (k vs C, i vs a swap-ish), so
+        // the diff emits a Replace op rather than Fuzzy. The GT word
+        // must still get a timestamp — Whisper's audio span at that
+        // position is the right answer.
+        let w = vec![
+            ww("hello", 0.0, 1.0),
+            ww("kavija", 1.0, 2.5),
+            ww("world", 2.5, 3.5),
+        ];
+        let g = gt(&["hello", "Cavia", "world"]);
+        let (aligned, _) = run(&w, &g, BoundaryStrategy::default());
+        assert_eq!(aligned.len(), 3);
+        assert_eq!(aligned[1].text, "Cavia");
+        // The middle word must have *Whisper's* timestamps, not 0–0
+        // and not interpolated.
+        assert_eq!(aligned[1].start_seconds, 1.0);
+        assert_eq!(aligned[1].end_seconds, 2.5);
+        assert_eq!(aligned[1].confidence, Confidence::Replaced);
     }
 
     #[test]

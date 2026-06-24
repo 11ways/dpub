@@ -72,6 +72,10 @@ pub enum Confidence {
     Exact,
     /// Near-match (Jaro-Winkler ≥ 0.85).
     Fuzzy,
+    /// Position-paired but not similar enough to be a fuzzy match —
+    /// timestamp comes from Whisper's audio span at the same position;
+    /// text comes from the ground truth.
+    Replaced,
     /// Inserted; timestamp interpolated proportionally from neighbours.
     Interpolated,
     /// Outside the anchor region under `bracket` strategy: timestamp

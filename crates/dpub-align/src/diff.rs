@@ -23,6 +23,18 @@ pub(crate) enum Op {
         gt_idx: usize,
         score: f64,
     },
+    /// Whisper word and ground truth word at the same position but
+    /// not similar enough to count as a fuzzy match (e.g. number
+    /// "2024" vs spoken form, name swaps, low-similarity errors).
+    /// Still a 1:1 positional pairing — the narrator said *something*
+    /// here, the book has *something* here, and the time span Whisper
+    /// produced for that audio chunk is the best estimate we have for
+    /// the GT word's timing.
+    Replace {
+        whisper_idx: usize,
+        gt_idx: usize,
+        score: f64,
+    },
     /// Whisper word with no ground truth counterpart (hallucinated /
     /// repeated / preamble).
     Delete { whisper_idx: usize },
@@ -110,12 +122,17 @@ pub(crate) fn diff_words(
                             score,
                         });
                     } else {
-                        // Genuinely different word: emit as
-                        // Delete + Insert. The transfer phase uses
-                        // Whisper's time span for the inserted word
-                        // anyway when these are adjacent.
-                        script.push(Op::Delete { whisper_idx: w_i });
-                        script.push(Op::Insert { gt_idx: g_i });
+                        // Position-paired but not similar enough to
+                        // call a fuzzy match. Emit as a single
+                        // Replace so transfer.rs can use Whisper's
+                        // time span for the GT word — the narrator
+                        // and the book are at the same position even
+                        // if the spelling diverges.
+                        script.push(Op::Replace {
+                            whisper_idx: w_i,
+                            gt_idx: g_i,
+                            score,
+                        });
                     }
                 }
                 for i in pair_len..old_len {
@@ -131,7 +148,84 @@ pub(crate) fn diff_words(
             }
         }
     }
+    coalesce_adjacent_delete_insert(&mut script, &whisper_key_refs, &gt_keys);
     script
+}
+
+/// Post-pass: pair adjacent Delete-runs with Insert-runs into Replace
+/// (or Fuzzy) ops. Myers diff sometimes emits these as separate blocks
+/// when the optimal edit-distance path doesn't classify them as a
+/// `Replace` together. From our perspective they're positionally
+/// paired — the audio span Whisper covered with `Delete` words is the
+/// same span the narrator was reading the corresponding `Insert`
+/// words. Without this pass, every such GT word ends up as a pure
+/// `Insert`, gets interpolation-collapsed to zero duration, and is
+/// filtered out of the SMIL by the MED-009 guard.
+fn coalesce_adjacent_delete_insert(
+    script: &mut Vec<Op>,
+    whisper_keys: &[&str],
+    gt_keys: &[&str],
+) {
+    let mut i = 0;
+    let mut out: Vec<Op> = Vec::with_capacity(script.len());
+    while i < script.len() {
+        // Collect a run of consecutive Deletes (and any Inserts that
+        // immediately follow). The order Myers emits is typically
+        // "Delete-run, Insert-run" within a divergence, but we accept
+        // either order — the positional pairing is what matters.
+        let run_start = i;
+        let mut deletes: Vec<usize> = Vec::new();
+        let mut inserts: Vec<usize> = Vec::new();
+        while i < script.len() {
+            match script[i] {
+                Op::Delete { whisper_idx } => {
+                    deletes.push(whisper_idx);
+                    i += 1;
+                }
+                Op::Insert { gt_idx } => {
+                    inserts.push(gt_idx);
+                    i += 1;
+                }
+                _ => break,
+            }
+        }
+        if deletes.is_empty() || inserts.is_empty() {
+            // Run was pure Delete or pure Insert — nothing to pair.
+            out.extend_from_slice(&script[run_start..i]);
+            continue;
+        }
+        // Pair up to min length. Pair-position 0 maps deletes[0] to
+        // inserts[0]; the leftover side stays as standalone Delete /
+        // Insert ops at the end of the run.
+        let pair_len = deletes.len().min(inserts.len());
+        for j in 0..pair_len {
+            let w_i = deletes[j];
+            let g_i = inserts[j];
+            let score = strsim::jaro_winkler(whisper_keys[w_i], gt_keys[g_i]);
+            if score >= FUZZY_THRESHOLD {
+                out.push(Op::Fuzzy {
+                    whisper_idx: w_i,
+                    gt_idx: g_i,
+                    score,
+                });
+            } else {
+                out.push(Op::Replace {
+                    whisper_idx: w_i,
+                    gt_idx: g_i,
+                    score,
+                });
+            }
+        }
+        for j in pair_len..deletes.len() {
+            out.push(Op::Delete {
+                whisper_idx: deletes[j],
+            });
+        }
+        for j in pair_len..inserts.len() {
+            out.push(Op::Insert { gt_idx: inserts[j] });
+        }
+    }
+    *script = out;
 }
 
 #[cfg(test)]
@@ -216,14 +310,19 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_words_stay_replace_split() {
-        // "table" vs "elephant" — Jaro-Winkler well below threshold
+    fn unrelated_words_at_same_position_emit_replace() {
+        // "table" vs "elephant" — Jaro-Winkler below the fuzzy
+        // threshold but the words are positionally paired, so the
+        // diff emits a single Replace op (not Delete + Insert).
+        // This lets transfer.rs reuse Whisper's time span for the
+        // ground truth word.
         let w = vec![ww("table", 0.0, 1.0)];
         let g = gt(&["elephant"]);
         let ops = diff_words(&w, &g);
-        // Should be Delete + Insert, not Fuzzy
-        assert!(ops.iter().any(|op| matches!(op, Op::Delete { .. })));
-        assert!(ops.iter().any(|op| matches!(op, Op::Insert { .. })));
-        assert!(!ops.iter().any(|op| matches!(op, Op::Fuzzy { .. })));
+        assert_eq!(ops.len(), 1);
+        match ops[0] {
+            Op::Replace { score, .. } => assert!(score < 0.85),
+            other => panic!("expected Replace, got {other:?}"),
+        }
     }
 }
